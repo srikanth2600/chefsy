@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gharka_chef
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d gharka_chef"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    volumes:
+    - ./backend:/app
+    environment:
+      APP_NAME: "Gharka Chef API"
+      CORS_ALLOW_ORIGINS: '["http://localhost:3005"]'
+      USE_POSTGRESQL: "true"
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: gharka_chef
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres123
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: "gpt-5-mini"
+      OPENAI_IMAGE_MODEL: "gpt-image-1"
+    ports:
+      - "8005:8005"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    volumes:
+    - ./frontend:/app
+    - /app/node_modules
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8005"
+    ports:
+      - "3005:3005"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+httpx>=0.24.0
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+psycopg[binary]
+openai
+email-validator
+python-multipart
