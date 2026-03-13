@@ -295,7 +295,7 @@ def get_chef_recipes(chef_id: int, page: int = 1, per_page: int = 20) -> Tuple[L
             total = cur.fetchone()["cnt"]
             cur.execute(
                 """
-                SELECT id, recipe_key, title, cuisine, created_at,
+                SELECT id, recipe_key, title, created_at,
                   (SELECT COUNT(*) FROM likes WHERE recipe_id = id) AS like_count
                 FROM recipe_master
                 WHERE chef_id = %s

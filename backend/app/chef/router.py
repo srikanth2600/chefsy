@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Query, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, Query, UploadFile, File, Form
 from typing import Optional
 import uuid, pathlib
 from app.chef import service, repository
@@ -13,7 +13,7 @@ from app.core.db import get_connection
 
 _MEDIA_ROOT = pathlib.Path(__file__).resolve().parents[3] / "media"
 _ALLOWED_IMG = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-_ALLOWED_VID = {"video/mp4", "video/quicktime", "video/webm"}
+_ALLOWED_VID = {"video/mp4", "video/quicktime", "video/webm", "video/x-matroska", "video/avi", "video/x-msvideo", "application/octet-stream"}
 _MAX_AVATAR = 2 * 1024 * 1024     # 2 MB
 _MAX_BANNER = 5 * 1024 * 1024     # 5 MB
 _MAX_REEL   = 100 * 1024 * 1024   # 100 MB
@@ -317,11 +317,10 @@ def create_reel(payload: ReelCreate, req: Request):
 async def upload_reel(
     req: Request,
     file: UploadFile = File(...),
-    title: str = None,
-    description: str = None,
-    hashtags: str = None,
+    title: str = Form(...),
+    description: str = Form(None),
+    hashtags: str = Form(None),
 ):
-    from fastapi import Form
     user_id = _require_user(req)
     chef = repository.get_by_user_id(user_id)
     if not chef:

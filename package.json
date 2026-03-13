@@ -1,0 +1,23 @@
+{
+  "name": "gharka-chef",
+  "version": "1.0.0",
+  "description": "1. Open a terminal in `backend`. 2. Create and activate a virtual environment. 3. Install dependencies:    - `pip install -r requirements.txt` 4. Run the API:    - `uvicorn app.main:app --reload --port 8005` 5. Health check:    - `http://localhost:8005/health`",
+  "main": "index.js",
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/srikanth2600/chefsy.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/srikanth2600/chefsy/issues"
+  },
+  "homepage": "https://github.com/srikanth2600/chefsy#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "@types/node": "^25.5.0"
+  }
+}

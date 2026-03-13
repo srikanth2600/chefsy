@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import { ChefThemeProvider, useChefTheme } from '@/components/chef/ChefThemeContext';
 import { Avatar, Pill, Btn, SLabel, Stars, ThemeToggle } from '@/components/chef/ui';
@@ -39,7 +39,8 @@ function recipeEmoji(title: string): string {
 function getYouTubeId(url: string): string {
   try {
     const u = new URL(url);
-    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1);
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1).split('?')[0];
+    if (u.pathname.includes('/shorts/')) return u.pathname.split('/shorts/')[1]?.split('?')[0] || '';
     return u.searchParams.get('v') || '';
   } catch { return ''; }
 }
@@ -48,60 +49,139 @@ function splitTags(value: string): string[] {
   return value.split(',').map(s => s.trim()).filter(Boolean);
 }
 
-// ─── Reel Player Modal ────────────────────────────────────────────────────────
-function ReelModal({ reel, accent, onClose }: { reel: Reel; accent: string; onClose: () => void }) {
-  const ytId  = reel.platform === 'youtube' && reel.video_url ? getYouTubeId(reel.video_url) : '';
-  const vimId = reel.platform === 'vimeo'   && reel.video_url ? (reel.video_url.split('/').pop() || '') : '';
-  const isLink = reel.platform === 'facebook' || reel.platform === 'instagram';
-  const isFile = reel.platform === 'upload';
-  const isDirect = reel.platform === 'direct' || reel.platform === 'other';
+// ─── Reel Player Modal ─────────────────────────────────────────────────────────
+function detectPlatform(url: string): string {
+  const u = url.toLowerCase();
+  if (u.includes('youtube.com') || u.includes('youtu.be')) return 'youtube';
+  if (u.includes('vimeo.com')) return 'vimeo';
+  if (u.includes('facebook.com') || u.includes('fb.watch')) return 'facebook';
+  if (u.includes('instagram.com')) return 'instagram';
+  if (u.endsWith('.mp4') || u.endsWith('.webm') || u.endsWith('.mov')) return 'direct';
+  return 'other';
+}
+
+function ReelPlayer({ reel, accent }: { reel: Reel; accent: string }) {
+  const platform = reel.platform || (reel.video_url ? detectPlatform(reel.video_url) : null);
+  const ytId     = platform === 'youtube' && reel.video_url ? getYouTubeId(reel.video_url) : '';
+  const vimId    = platform === 'vimeo'   && reel.video_url ? (reel.video_url.split('/').pop() || '') : '';
+  const isFile   = platform === 'upload';
+  const isDirect = platform === 'direct' || platform === 'other';
+  const isLink   = platform === 'facebook' || platform === 'instagram';
+
+  if (ytId) return (
+    <iframe
+      src={`https://www.youtube.com/embed/${ytId}?rel=0&autoplay=1&playsinline=1`}
+      title="YouTube" frameBorder="0"
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+      allowFullScreen style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+    />
+  );
+  if (vimId) return (
+    <iframe
+      src={`https://player.vimeo.com/video/${vimId}?autoplay=1`}
+      title="Vimeo" frameBorder="0" allow="autoplay; fullscreen" allowFullScreen
+      style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+    />
+  );
+  if (isFile && reel.video_file_path) return (
+    <video controls autoPlay playsInline style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} src={`${API}${reel.video_file_path}`} />
+  );
+  if (isDirect && reel.video_url) return (
+    <video controls autoPlay playsInline style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} src={reel.video_url} />
+  );
+  if (isLink && reel.video_url) return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, background: '#111' }}>
+      <div style={{ fontSize: 48 }}>{platform === 'facebook' ? '📘' : '📷'}</div>
+      <p style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, margin: 0 }}>Open in {platform === 'facebook' ? 'Facebook' : 'Instagram'}</p>
+      <a href={reel.video_url} target="_blank" rel="noreferrer" style={{ color: accent, fontSize: 13, padding: '9px 22px', border: `1px solid ${accent}55`, borderRadius: 10, textDecoration: 'none', background: `${accent}15` }}>↗ Watch Video</a>
+    </div>
+  );
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#111' }}>
+      <div style={{ fontSize: 64, opacity: 0.2 }}>🎬</div>
+    </div>
+  );
+}
+
+function ReelModal({ reels, initialIndex, accent, onClose }: {
+  reels: Reel[]; initialIndex: number; accent: string; onClose: () => void;
+}) {
+  const [idx, setIdx] = useState(Math.max(0, Math.min(initialIndex, reels.length - 1)));
+  const touchStartY = useRef<number | null>(null);
+  const reel = reels[idx];
+
+  const goNext = () => setIdx(i => Math.min(reels.length - 1, i + 1));
+  const goPrev = () => setIdx(i => Math.max(0, i - 1));
+
+  // Keyboard navigation
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') goNext();
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') goPrev();
+      else if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  if (!reel) return null;
 
   return (
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.93)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
+      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
       onClick={e => e.target === e.currentTarget && onClose()}
+      onTouchStart={e => { touchStartY.current = e.touches[0].clientY; }}
+      onTouchEnd={e => {
+        if (touchStartY.current === null) return;
+        const diff = touchStartY.current - e.changedTouches[0].clientY;
+        if (diff > 60) goNext();
+        else if (diff < -60) goPrev();
+        touchStartY.current = null;
+      }}
     >
-      <div style={{ width: '100%', maxWidth: 560 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-          <div style={{ flex: 1, paddingRight: 12 }}>
-            <p style={{ fontSize: 15, fontWeight: 700, color: '#F5EFE6', margin: '0 0 4px' }}>{reel.title}</p>
-            {reel.hashtags?.length > 0 && (
-              <p style={{ fontSize: 11, color: accent, margin: 0 }}>
-                {reel.hashtags.map(h => h.startsWith('#') ? h : `#${h}`).join(' ')}
-              </p>
-            )}
+      {/* Phone-shaped container */}
+      <div style={{ position: 'relative', width: '100%', maxWidth: 390, height: '88vh', maxHeight: 820, borderRadius: 28, overflow: 'hidden', background: '#000', boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 32px 80px rgba(0,0,0,0.8)' }}>
+
+        {/* Video fills full phone screen */}
+        <div style={{ position: 'absolute', inset: 0 }}>
+          <ReelPlayer key={reel.id} reel={reel} accent={accent} />
+        </div>
+
+        {/* Top bar: close + counter */}
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, transparent 100%)', zIndex: 10 }}>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {reels.map((_, i) => (
+              <div key={i} onClick={() => setIdx(i)} style={{ height: 3, flex: 1, minWidth: 20, maxWidth: 40, borderRadius: 2, background: i === idx ? '#fff' : 'rgba(255,255,255,0.35)', cursor: 'pointer', transition: 'background 0.2s' }} />
+            ))}
           </div>
-          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.06)', color: '#F5EFE6', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit', flexShrink: 0 }}>✕</button>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(8px)', color: '#fff', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit', flexShrink: 0, marginLeft: 10 }}>✕</button>
         </div>
-        <div style={{ borderRadius: 14, overflow: 'hidden', background: '#000', aspectRatio: '16/9', position: 'relative' }}>
-          {ytId && (
-            <iframe width="100%" height="100%" src={`https://www.youtube.com/embed/${ytId}?rel=0&autoplay=1`} title="YouTube" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: 'absolute', inset: 0 }} />
-          )}
-          {vimId && (
-            <iframe width="100%" height="100%" src={`https://player.vimeo.com/video/${vimId}?autoplay=1`} title="Vimeo" frameBorder="0" allow="autoplay; fullscreen" allowFullScreen style={{ position: 'absolute', inset: 0 }} />
-          )}
-          {isFile && reel.video_file_path && (
-            <video controls autoPlay style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} src={`${API}${reel.video_file_path}`} />
-          )}
-          {isDirect && reel.video_url && (
-            <video controls autoPlay style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} src={reel.video_url} />
-          )}
-          {isLink && reel.video_url && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-              <div style={{ fontSize: 40 }}>{reel.platform === 'facebook' ? '📘' : '📷'}</div>
-              <p style={{ color: '#fff', fontSize: 13, margin: 0 }}>Open in {reel.platform === 'facebook' ? 'Facebook' : 'Instagram'}</p>
-              <a href={reel.video_url} target="_blank" rel="noreferrer" style={{ color: accent, fontSize: 12, padding: '8px 18px', border: `1px solid ${accent}`, borderRadius: 8, textDecoration: 'none' }}>↗ Watch Video</a>
-            </div>
-          )}
-          {!ytId && !vimId && !isFile && !isDirect && !isLink && (
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ fontSize: 48, opacity: 0.3 }}>🎬</div>
-            </div>
+
+        {/* Bottom info overlay */}
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '48px 16px 24px', background: 'linear-gradient(transparent, rgba(0,0,0,0.88))', zIndex: 10, pointerEvents: 'none' }}>
+          <p style={{ fontSize: 14, fontWeight: 700, color: '#fff', margin: '0 0 5px', textShadow: '0 1px 4px rgba(0,0,0,0.6)' }}>{reel.title}</p>
+          {reel.description && <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', margin: '0 0 6px', lineHeight: 1.4 }}>{reel.description}</p>}
+          {reel.hashtags?.length > 0 && (
+            <p style={{ fontSize: 12, color: accent, margin: 0, fontWeight: 600 }}>
+              {reel.hashtags.map(h => h.startsWith('#') ? h : `#${h}`).join(' ')}
+            </p>
           )}
         </div>
-        {reel.description && (
-          <p style={{ margin: '12px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.7)', lineHeight: 1.6 }}>{reel.description}</p>
+
+        {/* Up arrow (prev) */}
+        {idx > 0 && (
+          <button onClick={goPrev} style={{ position: 'absolute', top: '50%', right: 14, transform: 'translateY(-60px)', zIndex: 10, width: 38, height: 38, borderRadius: '50%', border: '1.5px solid rgba(255,255,255,0.25)', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)', color: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>↑</button>
         )}
+
+        {/* Down arrow (next) */}
+        {idx < reels.length - 1 && (
+          <button onClick={goNext} style={{ position: 'absolute', top: '50%', right: 14, transform: 'translateY(20px)', zIndex: 10, width: 38, height: 38, borderRadius: '50%', border: '1.5px solid rgba(255,255,255,0.25)', background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(8px)', color: '#fff', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>↓</button>
+        )}
+
+        {/* Reel count badge */}
+        <div style={{ position: 'absolute', top: 56, right: 16, zIndex: 10, fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.7)', background: 'rgba(0,0,0,0.35)', borderRadius: 20, padding: '3px 8px', backdropFilter: 'blur(4px)' }}>
+          {idx + 1} / {reels.length}
+        </div>
       </div>
     </div>
   );
@@ -171,10 +251,10 @@ function ChefProfilePage() {
   useEffect(() => {
     if (!slug) return;
     Promise.all([
-      fetch(`${API}/chefs/${slug}`).then(r => r.ok ? r.json() : null),
-      fetch(`${API}/chefs/${slug}/roles`).then(r => r.ok ? r.json() : null),
-      fetch(`${API}/chefs/${slug}/recipes?per_page=24`).then(r => r.ok ? r.json() : null),
-      fetch(`${API}/chefs/${slug}/reels?per_page=50`).then(r => r.ok ? r.json() : null),
+      fetch(`${API}/chefs/${slug}`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/chefs/${slug}/roles`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/chefs/${slug}/recipes?per_page=24`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API}/chefs/${slug}/reels?per_page=50`).then(r => r.ok ? r.json() : null).catch(() => null),
     ]).then(([profile, rolesData, recipesData, reelsData]) => {
       if (profile) {
         setChef({
@@ -232,7 +312,7 @@ function ChefProfilePage() {
         <div style={{ position: 'absolute', inset: 0, backgroundImage: 'repeating-linear-gradient(45deg,transparent,transparent 20px,rgba(255,255,255,0.025) 20px,rgba(255,255,255,0.025) 40px)' }} />
         <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to bottom,transparent 50%,rgba(0,0,0,0.45))' }} />
         <div style={{ position: 'absolute', top: 12, left: 14, right: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button onClick={() => router.back()} style={{ width: 36, height: 36, borderRadius: 10, border: 'none', background: 'rgba(0,0,0,0.5)', color: '#F5EFE6', cursor: 'pointer', fontSize: 16, backdropFilter: 'blur(8px)', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>←</button>
+          <button onClick={() => { if (typeof window !== 'undefined' && window.history.length > 1) router.back(); else router.push('/'); }} style={{ width: 36, height: 36, borderRadius: 10, border: 'none', background: 'rgba(0,0,0,0.5)', color: '#F5EFE6', cursor: 'pointer', fontSize: 16, backdropFilter: 'blur(8px)', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>←</button>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {chef.featured && <div style={{ background: 'rgba(218,119,86,0.92)', color: '#fff', fontSize: 9, fontWeight: 700, padding: '3px 10px', borderRadius: 99, letterSpacing: '0.06em' }}>★ Featured</div>}
             <ThemeToggle />
@@ -255,7 +335,9 @@ function ChefProfilePage() {
             )}
           </div>
           <div style={{ display: 'flex', gap: 8, paddingBottom: 4, position: 'relative' }}>
-            <button onClick={() => setShareOpen(v => !v)} style={{ width: 40, height: 40, borderRadius: '50%', border: `1.5px solid ${t.border}`, background: t.bgCard, color: t.textSecondary, cursor: 'pointer', fontSize: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>↗</button>
+            <button onClick={() => setShareOpen(v => !v)} style={{ width: 40, height: 40, borderRadius: '50%', border: `1.5px solid ${t.border}`, background: t.bgCard, color: t.textSecondary, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>
+            </button>
             <button onClick={() => setMsgOpen(true)} style={{ width: 40, height: 40, borderRadius: '50%', border: 'none', background: accent, color: '#fff', cursor: 'pointer', fontSize: 17, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit' }}>💬</button>
             {shareOpen && <SharePopup slug={slug} chefName={chef.name} accent={accent} t={t} onClose={() => setShareOpen(false)} />}
           </div>
@@ -338,19 +420,36 @@ function ChefProfilePage() {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 3 }}>
               {reels.map(reel => {
-                const ytId = reel.platform === 'youtube' && reel.video_url ? getYouTubeId(reel.video_url) : '';
-                const thumb = ytId ? `https://img.youtube.com/vi/${ytId}/mqdefault.jpg` : reel.thumbnail || null;
+                const reelPlatform = reel.platform || (reel.video_url ? detectPlatform(reel.video_url) : null);
+                const ytId = reelPlatform === 'youtube' && reel.video_url ? getYouTubeId(reel.video_url) : '';
+                const thumb = ytId
+                  ? `https://img.youtube.com/vi/${ytId}/mqdefault.jpg`
+                  : reel.thumbnail
+                    ? (reel.thumbnail.startsWith('/media') ? `${API}${reel.thumbnail}` : reel.thumbnail)
+                    : null;
+                const platformLabel = reelPlatform === 'youtube' ? 'YT' : reelPlatform === 'instagram' ? 'IG' : reelPlatform === 'facebook' ? 'FB' : reelPlatform === 'vimeo' ? 'VI' : '▶';
                 return (
-                  <div key={reel.id} onClick={() => setActiveReel(reel)} style={{ position: 'relative', aspectRatio: '9/14', cursor: 'pointer', overflow: 'hidden', borderRadius: 8, background: `linear-gradient(135deg,${chef.avatar_color}33,${t.bgCard})` }}>
-                    {thumb ? <img src={thumb} alt={reel.title} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /> : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 28, opacity: 0.25 }}>🎬</div>}
-                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(transparent 40%,rgba(0,0,0,0.75))' }} />
-                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', backdropFilter: 'blur(4px)', border: '1.5px solid rgba(255,255,255,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <span style={{ fontSize: 12, color: '#fff', marginLeft: 2 }}>▶</span>
+                  <div key={reel.id} onClick={() => setActiveReel(reel)} style={{ position: 'relative', aspectRatio: '9/14', cursor: 'pointer', overflow: 'hidden', borderRadius: 8, background: `linear-gradient(160deg,${chef.avatar_color}55 0%,#111 100%)` }}>
+                    {thumb
+                      ? <img src={thumb} alt={reel.title} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : (
+                        <>
+                          {/* Uploaded video: show a cinematic gradient placeholder */}
+                          <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(160deg,${chef.avatar_color}88 0%,#0a0a0a 100%)` }} />
+                          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 6 }}>
+                            <div style={{ fontSize: 28, opacity: 0.55 }}>🎬</div>
+                          </div>
+                        </>
+                      )
+                    }
+                    <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(transparent 35%,rgba(0,0,0,0.8))' }} />
+                    {/* Play button */}
+                    <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', backdropFilter: 'blur(4px)', border: '1.5px solid rgba(255,255,255,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span style={{ fontSize: 12, color: '#fff', marginLeft: 3 }}>▶</span>
                     </div>
+                    {/* Platform badge */}
                     <div style={{ position: 'absolute', top: 6, left: 6 }}>
-                      <span style={{ fontSize: 8, fontWeight: 700, padding: '2px 5px', borderRadius: 4, background: 'rgba(0,0,0,0.6)', color: '#fff' }}>
-                        {reel.platform === 'youtube' ? 'YT' : reel.platform === 'instagram' ? 'IG' : reel.platform === 'facebook' ? 'FB' : reel.platform === 'upload' ? '📁' : '▶'}
-                      </span>
+                      <span style={{ fontSize: 8, fontWeight: 700, padding: '2px 5px', borderRadius: 4, background: 'rgba(0,0,0,0.65)', color: '#fff', letterSpacing: '0.03em' }}>{platformLabel}</span>
                     </div>
                     <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '5px 7px' }}>
                       <p style={{ fontSize: 9, color: '#fff', margin: '0 0 2px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reel.title}</p>
@@ -395,7 +494,14 @@ function ChefProfilePage() {
       </div>
 
       {/* Reel player modal */}
-      {activeReel && <ReelModal reel={activeReel} accent={accent} onClose={() => setActiveReel(null)} />}
+      {activeReel && (
+        <ReelModal
+          reels={reels}
+          initialIndex={reels.findIndex(r => r.id === activeReel.id)}
+          accent={accent}
+          onClose={() => setActiveReel(null)}
+        />
+      )}
 
       {/* Message modal */}
       {msgOpen && (

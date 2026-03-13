@@ -24,7 +24,9 @@ interface Reel {
 function getYouTubeId(url: string): string {
   try {
     const u = new URL(url);
-    return u.searchParams.get('v') || u.pathname.split('/').pop() || '';
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1).split('?')[0];
+    if (u.pathname.includes('/shorts/')) return u.pathname.split('/shorts/')[1]?.split('?')[0] || '';
+    return u.searchParams.get('v') || '';
   } catch { return ''; }
 }
 
