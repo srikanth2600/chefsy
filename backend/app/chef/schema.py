@@ -230,3 +230,31 @@ class ReelOut(BaseModel):
     status: str
     view_count: int
     created_at: str
+
+
+# ─── Chef Recipes (chef-authored) ─────────────────────────────────────────────
+
+class IngredientIn(BaseModel):
+    name: str
+    quantity: str = ""
+    unit: str = "g"
+
+
+class RecipeSave(BaseModel):
+    id: Optional[int] = None          # set when updating an existing recipe
+    title: str
+    cuisine: Optional[str] = ""
+    difficulty: Optional[str] = "Moderate"
+    cook_time: Optional[str] = ""
+    servings: Optional[int] = 4
+    description: Optional[str] = ""
+    tips: Optional[str] = ""
+    video_url: Optional[str] = ""
+    image_url: Optional[str] = None
+    ingredients: list[IngredientIn] = []
+    steps: list[str] = []
+    calories: Optional[str] = None
+    protein: Optional[str] = None
+    carbs: Optional[str] = None
+    fat: Optional[str] = None
+    is_published: bool = False

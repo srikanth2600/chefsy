@@ -241,8 +241,9 @@ function ChefProfilePage() {
   const [activeReel, setActiveReel] = useState<Reel | null>(null);
   const [appTheme, setAppTheme]     = useState<AppearanceTheme>({ banner_color: '#DA7756', accent_color: '#DA7756', font: 'Georgia, serif', bg_style: 'dark' });
   const [roles, setRoles]           = useState<string[]>([]);
-  const [recipes, setRecipes]       = useState<{ id: number; title: string; like_count: number }[]>([]);
+  const [recipes, setRecipes]       = useState<{ id: number; title: string; like_count: number; image_url?: string | null; cuisine?: string; difficulty?: string; cook_time?: string; description?: string }[]>([]);
   const [reels, setReels]           = useState<Reel[]>([]);
+  const [activeRecipe, setActiveRecipe] = useState<{ id: number; title: string; like_count: number; image_url?: string | null; cuisine?: string; difficulty?: string; cook_time?: string; description?: string } | null>(null);
   const [likedPosts, setLikedPosts] = useState<Record<number, boolean>>({});
   const [msgOpen, setMsgOpen]       = useState(false);
   const [msgText, setMsgText]       = useState('');
@@ -276,7 +277,12 @@ function ChefProfilePage() {
         setAppTheme(profile.appearance_theme || { banner_color: profile.avatar_color || '#DA7756', accent_color: '#DA7756', font: 'Georgia, serif', bg_style: 'dark' });
       }
       if (rolesData?.roles) setRoles(rolesData.roles.map((r: any) => r.name));
-      if (recipesData?.recipes) setRecipes(recipesData.recipes);
+      if (recipesData?.recipes) setRecipes(recipesData.recipes.map((r: any) => ({
+        id: r.id, title: r.title || '', like_count: r.like_count || 0,
+        image_url: r.image_url || null, cuisine: r.cuisine || '',
+        difficulty: r.difficulty || '', cook_time: r.cook_time || '',
+        description: r.description || '',
+      })));
       if (reelsData?.reels) setReels(reelsData.reels.filter((r: Reel) => r.status === 'active'));
     }).catch(() => {}).finally(() => setLoading(false));
   }, [slug]);
@@ -477,8 +483,11 @@ function ChefProfilePage() {
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2 }}>
               {recipes.map((item, i) => (
-                <div key={`recipe-${item.id}`} style={{ position: 'relative', aspectRatio: '1', background: `linear-gradient(135deg,${chef.avatar_color}22,${t.bgCard})`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden' }}>
-                  <span style={{ fontSize: 34, opacity: 0.28 }}>{recipeEmoji(item.title)}</span>
+                <div key={`recipe-${item.id}`} onClick={() => setActiveRecipe(item)} style={{ position: 'relative', aspectRatio: '1', background: `linear-gradient(135deg,${chef.avatar_color}22,${t.bgCard})`, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden' }}>
+                  {item.image_url
+                    ? <img src={item.image_url} alt={item.title} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <span style={{ fontSize: 34, opacity: 0.28 }}>{recipeEmoji(item.title)}</span>
+                  }
                   <div style={{ position: 'absolute', inset: 0, padding: '4px 6px', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', background: 'linear-gradient(transparent 50%,rgba(0,0,0,0.7))' }}>
                     <p style={{ fontSize: 8, color: '#fff', margin: '0 0 2px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</p>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -501,6 +510,42 @@ function ChefProfilePage() {
           accent={accent}
           onClose={() => setActiveReel(null)}
         />
+      )}
+
+      {/* Recipe detail modal */}
+      {activeRecipe && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(0,0,0,0.88)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={e => e.target === e.currentTarget && setActiveRecipe(null)}>
+          <div style={{ width: '100%', maxWidth: 520, maxHeight: '88vh', background: t.bg, borderRadius: 20, overflow: 'hidden', display: 'flex', flexDirection: 'column', border: `1px solid ${t.border}` }}>
+            <div style={{ flexShrink: 0, height: 180, background: activeRecipe.image_url ? `url(${activeRecipe.image_url}) center/cover` : `linear-gradient(135deg,${accent}55,${accent}22)`, position: 'relative' }}>
+              {!activeRecipe.image_url && <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 72, opacity: 0.15 }}>{recipeEmoji(activeRecipe.title)}</div>}
+              <button onClick={() => setActiveRecipe(null)} style={{ position: 'absolute', top: 12, right: 12, width: 34, height: 34, borderRadius: 10, border: 'none', background: 'rgba(0,0,0,0.55)', color: '#fff', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(6px)', fontFamily: 'inherit' }}>✕</button>
+              <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '32px 16px 14px', background: 'linear-gradient(transparent,rgba(0,0,0,0.75))' }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {activeRecipe.cuisine && <span style={{ fontSize: 9, background: 'rgba(0,0,0,0.55)', color: '#F5EFE6', padding: '2px 8px', borderRadius: 99, fontWeight: 600 }}>{activeRecipe.cuisine}</span>}
+                  {activeRecipe.difficulty && <span style={{ fontSize: 9, background: `${accent}88`, color: '#fff', padding: '2px 8px', borderRadius: 99, fontWeight: 700 }}>{activeRecipe.difficulty}</span>}
+                  {activeRecipe.cook_time && <span style={{ fontSize: 9, background: 'rgba(0,0,0,0.55)', color: '#F5EFE6', padding: '2px 8px', borderRadius: 99 }}>⏱ {activeRecipe.cook_time}</span>}
+                </div>
+              </div>
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px 24px' }}>
+              <h2 style={{ fontSize: 19, fontWeight: 900, color: t.textPrimary, margin: '0 0 10px', fontFamily: appTheme.font }}>{activeRecipe.title}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 14, borderBottom: `1px solid ${t.border}`, marginBottom: 14 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 8, background: chef.avatar_color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0 }}>
+                  {avatarUrl ? <img src={avatarUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} /> : '👨‍🍳'}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: 12, fontWeight: 700, color: t.textPrimary, margin: 0 }}>{chef.name}</p>
+                  <p style={{ fontSize: 10, color: accent, margin: 0 }}>{chef.role}</p>
+                </div>
+                <span style={{ fontSize: 11, color: '#F59E0B', fontWeight: 700 }}>♥ {activeRecipe.like_count}</span>
+              </div>
+              {activeRecipe.description
+                ? <div style={{ fontSize: 13, color: t.textSecondary, lineHeight: 1.75 }} dangerouslySetInnerHTML={{ __html: activeRecipe.description }} />
+                : <p style={{ fontSize: 13, color: t.textTertiary, margin: 0 }}>No description added yet.</p>
+              }
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Message modal */}

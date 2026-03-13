@@ -209,6 +209,14 @@ def run_startup_migrations() -> None:
                 except Exception:
                     logger.exception("Failed to add recipe_master.chef_id column (continuing)")
 
+                # is_active + is_published columns for admin moderation and draft support
+                try:
+                    cur.execute("ALTER TABLE recipe_master ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;")
+                    cur.execute("ALTER TABLE recipe_master ADD COLUMN IF NOT EXISTS is_published BOOLEAN NOT NULL DEFAULT TRUE;")
+                    logger.info("Ensured recipe_master.is_active / is_published columns exist")
+                except Exception:
+                    logger.exception("Failed to add recipe_master is_active/is_published columns (continuing)")
+
                 # Chef roles tables
                 try:
                     cur.execute("""

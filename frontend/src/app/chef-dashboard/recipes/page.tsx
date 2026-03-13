@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useChefTheme } from '@/components/chef/ChefThemeContext';
 import { Btn, SLabel, Card, ThemeToggle, fmtN, Pill } from '@/components/chef/ui';
-import type { Recipe, RecipeIngredient } from '@/components/chef/types';
+import type { RecipeIngredient } from '@/components/chef/types';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8005';
 const tok = () => { try { return localStorage.getItem('gharka_token') || ''; } catch { return ''; } };
@@ -391,7 +391,11 @@ function RecipePreview({ title, cuisine, difficulty, cookTime, servings, desc, t
 }
 
 // ─── Upload / Edit Form ───────────────────────────────────────────────────────
-function RecipeForm({ onClose, initial }: { onClose: () => void; initial?: Partial<Recipe> }) {
+function RecipeForm({ onClose, onSaved, initial }: {
+  onClose: () => void;
+  onSaved: (data: ListRecipe) => void;
+  initial?: Partial<ListRecipe>;
+}) {
   const { t } = useChefTheme();
   const [title, setTitle]           = useState(initial?.title || '');
   const [cuisine, setCuisine]       = useState(initial?.cuisine || '');
@@ -399,20 +403,20 @@ function RecipeForm({ onClose, initial }: { onClose: () => void; initial?: Parti
   const [cookTime, setCookTime]     = useState(initial?.cook_time || '');
   const [servings, setServings]     = useState<number>(initial?.servings || 4);
   const [desc, setDesc]             = useState(initial?.description || '');
-  const [tips, setTips]             = useState('');
-  const [ytUrl, setYtUrl]           = useState('');
+  const [tips, setTips]             = useState(initial?.tips || '');
+  const [ytUrl, setYtUrl]           = useState(initial?.ytUrl || '');
   const [selectedReel, setSelectedReel] = useState('');
   const [reels, setReels]           = useState<{id:number;title:string;video_url?:string;platform?:string}[]>([]);
-  const [imageUrl, setImageUrl]     = useState<string | null>(null);
+  const [imageUrl, setImageUrl]     = useState<string | null>(initial?.image_url || null);
   const [imageFile, setImageFile]   = useState<File | null>(null);
   const [ingredients, setIngredients] = useState<RecipeIngredient[]>(
-    initial?.ingredients || [{ name: '', quantity: '', unit: 'g' }, { name: '', quantity: '', unit: 'g' }]
+    initial?.ingredients?.length ? initial.ingredients : [{ name: '', quantity: '', unit: 'g' }, { name: '', quantity: '', unit: 'g' }]
   );
-  const [steps, setSteps]           = useState<string[]>(initial?.steps || ['', '']);
-  const [calories, setCalories]     = useState('');
-  const [protein, setProtein]       = useState('');
-  const [carbs, setCarbs]           = useState('');
-  const [fat, setFat]               = useState('');
+  const [steps, setSteps]           = useState<string[]>(initial?.steps?.length ? initial.steps : ['', '']);
+  const [calories, setCalories]     = useState(initial?.calories || '');
+  const [protein, setProtein]       = useState(initial?.protein || '');
+  const [carbs, setCarbs]           = useState(initial?.carbs || '');
+  const [fat, setFat]               = useState(initial?.fat || '');
   const [saving, setSaving]         = useState(false);
   const [toast, setToast]           = useState('');       // inline draft-saved banner
   const [published, setPublished]   = useState(false);
@@ -445,15 +449,49 @@ function RecipeForm({ onClose, initial }: { onClose: () => void; initial?: Parti
     if (!title.trim()) { alert('Recipe name is required'); return; }
     setSaving(true);
     setPublished(publish);
-    // TODO: replace with real API call
-    await new Promise(r => setTimeout(r, 700));
-    setSaving(false);
-    if (publish) {
-      setDone(true);
-    } else {
-      // Draft: show brief toast then return to list
-      setToast('✓ Draft saved');
-      setTimeout(() => { setToast(''); onClose(); }, 1400);
+    try {
+      const token = tok();
+      const res = await fetch(`${API}/chefs/me/recipes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          id: initial?.id ?? null,
+          title, cuisine, difficulty, cook_time: cookTime, servings,
+          description: desc, tips, video_url: ytUrl,
+          image_url: imageUrl,
+          ingredients: ingredients.filter(i => i.name.trim()),
+          steps: steps.filter(s => s.trim()),
+          calories: calories || null, protein: protein || null,
+          carbs: carbs || null, fat: fat || null,
+          is_published: publish,
+        }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      const saved = await res.json();
+      setSaving(false);
+
+      const fullData: ListRecipe = {
+        id: saved.id,
+        title, cuisine, difficulty, cook_time: cookTime, servings,
+        description: desc, tips, ytUrl, ingredients, steps, image_url: imageUrl,
+        calories, protein, carbs, fat,
+        views: initial?.views ?? 0,
+        likes: initial?.likes ?? 0,
+        published: publish,
+        created: initial?.created ?? 'Just now',
+      };
+
+      if (publish) {
+        setDone(true);
+        // store fullData for when user clicks "Back to Recipes"
+        (window as any).__savedRecipe = fullData;
+      } else {
+        setToast('✓ Draft saved');
+        setTimeout(() => { setToast(''); onSaved(fullData); }, 1000);
+      }
+    } catch {
+      setSaving(false);
+      alert('Failed to save recipe. Please check your connection and try again.');
     }
   };
 
@@ -465,8 +503,8 @@ function RecipeForm({ onClose, initial }: { onClose: () => void; initial?: Parti
         <h2 style={{ fontSize: 18, fontWeight: 800, color: t.textPrimary, fontFamily: 'Georgia, serif', margin: 0 }}>Recipe Published!</h2>
         <p style={{ fontSize: 13, color: t.textSecondary, textAlign: 'center', maxWidth: 320 }}>Viewers can now like, comment and share your recipe.</p>
         <div style={{ display: 'flex', gap: 10 }}>
-          <Btn variant="ghost" t={t} onClick={() => { setDone(false); setTitle(''); setDesc(''); setTips(''); setYtUrl(''); setImageUrl(null); setImageFile(null); setSteps(['','']); setIngredients([{name:'',quantity:'',unit:'g'},{name:'',quantity:'',unit:'g'}]); }}>+ Add Another</Btn>
-          <Btn t={t} onClick={onClose}>← Back to Recipes</Btn>
+          <Btn variant="ghost" t={t} onClick={() => { const d = (window as any).__savedRecipe; if (d) onSaved(d); }}>+ Add Another</Btn>
+          <Btn t={t} onClick={() => { const d = (window as any).__savedRecipe; if (d) onSaved(d); }}>← Back to Recipes</Btn>
         </div>
       </div>
     );
@@ -605,11 +643,11 @@ function RecipeForm({ onClose, initial }: { onClose: () => void; initial?: Parti
               {ingredients.map((ing, i) => (
                 <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 60px 110px 28px', gap: 6, marginBottom: 7, alignItems: 'center' }}>
                   <input value={ing.name} onChange={e => setIngredients(p => p.map((x, j) => j === i ? { ...x, name: e.target.value } : x))} placeholder="Ingredient" style={fi} />
-                  <input value={ing.quantity} onChange={e => setIngredients(p => p.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} placeholder="Qty" style={fi} />
+                  <input value={ing.quantity} onChange={e => setIngredients(p => p.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} placeholder="½, 1¼…" style={fi} />
                   <CustomSelect
                     value={ing.unit}
                     onChange={v => setIngredients(p => p.map((x, j) => j === i ? { ...x, unit: v } : x))}
-                    options={['g','kg','ml','l','cup','tbsp','tsp','piece','pinch'].map(u => ({ value: u, label: u }))}
+                    options={['g','kg','ml','l','cup','tbsp','tsp','piece','pinch','small','medium','large','to taste','as needed','for frying'].map(u => ({ value: u, label: u }))}
                   />
                   <button onClick={() => ingredients.length > 1 && setIngredients(p => p.filter((_, j) => j !== i))}
                     style={{ width: 28, height: 34, borderRadius: 8, border: `1px solid ${t.border}`, background: t.bgSurface, color: t.error, cursor: ingredients.length > 1 ? 'pointer' : 'not-allowed', fontSize: 12, opacity: ingredients.length > 1 ? 1 : 0.3, fontFamily: 'inherit' }}>✕</button>
@@ -682,16 +720,18 @@ function RecipeForm({ onClose, initial }: { onClose: () => void; initial?: Parti
 }
 
 // ─── Recipes List ─────────────────────────────────────────────────────────────
-function RecipesList({ onNew, onEdit }: { onNew: () => void; onEdit: (r: Partial<Recipe>) => void }) {
+type ListRecipe = {
+  id: number; title: string; cuisine: string; difficulty: string;
+  cook_time: string; servings: number; description: string; tips: string;
+  ytUrl: string; ingredients: RecipeIngredient[]; steps: string[];
+  image_url: string | null; calories: string; protein: string; carbs: string; fat: string;
+  views: number; likes: number; published: boolean; created: string;
+};
+
+function RecipesList({ list, onNew, onEdit, loading }: { list: ListRecipe[]; onNew: () => void; onEdit: (r: ListRecipe) => void; loading?: boolean }) {
   const { t } = useChefTheme();
   const router = useRouter();
   const isPro = false;
-
-  const mockList = [
-    { id: 1, title: 'Dum Biryani',      cuisine: 'Hyderabadi', difficulty: 'Hard',     views: 2840, likes: 521, published: true,  created: '2 days ago' },
-    { id: 2, title: 'Haleem',           cuisine: 'Hyderabadi', difficulty: 'Hard',     views: 1240, likes: 188, published: true,  created: '1 week ago' },
-    { id: 3, title: 'Mirchi ka Salan',  cuisine: 'Hyderabadi', difficulty: 'Moderate', views: 680,  likes: 94,  published: false, created: '2 weeks ago' },
-  ];
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', background: t.bg, padding: '20px 18px 60px' }}>
@@ -701,7 +741,7 @@ function RecipesList({ onNew, onEdit }: { onNew: () => void; onEdit: (r: Partial
             <button onClick={() => router.push('/chef-dashboard')} style={{ background: 'none', border: 'none', color: t.textSecondary, cursor: 'pointer', fontSize: 16, fontFamily: 'inherit' }}>←</button>
             <div>
               <h1 style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, margin: 0 }}>My Recipes</h1>
-              <p style={{ fontSize: 11, color: t.textTertiary, margin: 0 }}>{mockList.length} recipes · {mockList.filter(r => r.published).length} live</p>
+              <p style={{ fontSize: 11, color: t.textTertiary, margin: 0 }}>{loading ? 'Loading…' : `${list.length} recipes · ${list.filter(r => r.published).length} live`}</p>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -712,12 +752,28 @@ function RecipesList({ onNew, onEdit }: { onNew: () => void; onEdit: (r: Partial
 
         {!isPro && (
           <div style={{ background: t.bgCard, border: `1px solid ${t.borderAcc}`, borderRadius: 12, padding: '10px 14px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: t.textSecondary, flex: 1 }}>Free plan: {mockList.length}/3 recipes used</span>
+            <span style={{ fontSize: 12, color: t.textSecondary, flex: 1 }}>Free plan: {list.length}/3 recipes used</span>
             <Btn t={t} size="sm">✦ Upgrade for unlimited</Btn>
           </div>
         )}
 
-        {mockList.map(r => (
+        {loading && (
+          <div style={{ textAlign: 'center', padding: '48px 20px', color: t.textTertiary }}>
+            <div style={{ fontSize: 32, marginBottom: 8, opacity: 0.4 }}>⏳</div>
+            <p style={{ fontSize: 13, color: t.textSecondary, margin: 0 }}>Loading your recipes…</p>
+          </div>
+        )}
+
+        {!loading && list.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '48px 20px', color: t.textTertiary }}>
+            <div style={{ fontSize: 48, marginBottom: 12 }}>🍳</div>
+            <p style={{ fontSize: 14, fontWeight: 600, color: t.textSecondary, margin: '0 0 6px' }}>No recipes yet</p>
+            <p style={{ fontSize: 12, margin: '0 0 18px' }}>Create your first recipe to share with the world.</p>
+            <Btn t={t} onClick={onNew}>+ New Recipe</Btn>
+          </div>
+        )}
+
+        {list.map(r => (
           <div key={r.id}
             style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 13, padding: '13px 15px', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 9, transition: 'border-color 0.15s' }}
             onMouseEnter={e => (e.currentTarget.style.borderColor = t.borderAcc)}
@@ -738,7 +794,7 @@ function RecipesList({ onNew, onEdit }: { onNew: () => void; onEdit: (r: Partial
                 {r.published ? '● Live' : '○ Draft'}
               </span>
               <div style={{ display: 'flex', gap: 5 }}>
-                <button onClick={() => onEdit(r as unknown as Partial<Recipe>)} style={{ fontSize: 10, padding: '3px 9px', borderRadius: 7, border: `1px solid ${t.border}`, background: 'transparent', color: t.textSecondary, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
+                <button onClick={() => onEdit(r)} style={{ fontSize: 10, padding: '3px 9px', borderRadius: 7, border: `1px solid ${t.border}`, background: 'transparent', color: t.textSecondary, cursor: 'pointer', fontFamily: 'inherit' }}>Edit</button>
                 <button style={{ fontSize: 10, padding: '3px 9px', borderRadius: 7, border: `1px solid ${t.error}22`, background: 'transparent', color: t.error, cursor: 'pointer', fontFamily: 'inherit' }}>Delete</button>
               </div>
             </div>
@@ -750,14 +806,69 @@ function RecipesList({ onNew, onEdit }: { onNew: () => void; onEdit: (r: Partial
 }
 
 // ─── Recipes Page ─────────────────────────────────────────────────────────────
+function apiToListRecipe(r: any): ListRecipe {
+  return {
+    id: r.id,
+    title: r.title || '',
+    cuisine: r.cuisine || '',
+    difficulty: r.difficulty || 'Moderate',
+    cook_time: r.cook_time || '',
+    servings: r.servings || 4,
+    description: r.description || '',
+    tips: r.tips || '',
+    ytUrl: r.video_url || '',
+    ingredients: r.ingredients || [],
+    steps: r.steps || [],
+    image_url: r.image_url || null,
+    calories: r.calories || '',
+    protein: r.protein || '',
+    carbs: r.carbs || '',
+    fat: r.fat || '',
+    views: 0,
+    likes: r.like_count || 0,
+    published: r.is_published ?? true,
+    created: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Unknown',
+  };
+}
+
 function RecipesPage() {
   const [mode, setMode]       = useState<'list' | 'new' | 'edit'>('list');
-  const [editing, setEditing] = useState<Partial<Recipe> | undefined>(undefined);
-  const handleEdit = (r: Partial<Recipe>) => { setEditing(r); setMode('edit'); };
+  const [editing, setEditing] = useState<ListRecipe | undefined>(undefined);
+  const [list, setList]       = useState<ListRecipe[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Load real recipes from API on mount
+  useEffect(() => {
+    const token = tok();
+    if (!token) { setLoading(false); return; }
+    fetch(`${API}/chefs/me/recipes?per_page=100`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.recipes) setList(d.recipes.map(apiToListRecipe)); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const handleEdit = (r: ListRecipe) => { setEditing(r); setMode('edit'); };
+
+  const handleSaved = (data: ListRecipe) => {
+    setList(prev => {
+      const exists = prev.some(r => r.id === data.id);
+      return exists ? prev.map(r => r.id === data.id ? data : r) : [data, ...prev];
+    });
+    setMode('list');
+    setEditing(undefined);
+  };
+
   if (mode === 'new' || mode === 'edit') {
-    return <RecipeForm initial={mode === 'edit' ? editing : undefined} onClose={() => { setMode('list'); setEditing(undefined); }} />;
+    return (
+      <RecipeForm
+        initial={mode === 'edit' ? editing : undefined}
+        onClose={() => { setMode('list'); setEditing(undefined); }}
+        onSaved={handleSaved}
+      />
+    );
   }
-  return <RecipesList onNew={() => setMode('new')} onEdit={handleEdit} />;
+  return <RecipesList list={list} onNew={() => setMode('new')} onEdit={handleEdit} loading={loading} />;
 }
 
 export default function RecipesWrapper() {

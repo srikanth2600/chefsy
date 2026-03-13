@@ -414,6 +414,7 @@ def list_recipes(request: Request):
 
     q = (request.query_params.get("q") or "").strip()
     cuisine = (request.query_params.get("cuisine") or "").strip()
+    recipe_type = (request.query_params.get("recipe_type") or "").strip().lower()  # ai | chef | draft
     try:
         page = int(request.query_params.get("page") or "1")
     except ValueError:
@@ -432,22 +433,33 @@ def list_recipes(request: Request):
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            filters = []
+            filters = ["1=1"]
             params = []
             if q:
                 like = f"%{q}%"
-                filters.append("(title ILIKE %s OR recipe_key ILIKE %s)")
+                filters.append("(rm.title ILIKE %s OR rm.recipe_key ILIKE %s)")
                 params.extend([like, like])
             if cuisine:
-                filters.append("recipe_json->'meta'->> 'cuisine' ILIKE %s OR (recipe_json->> 'cuisine') ILIKE %s")
+                filters.append("(rm.recipe_json->'meta'->>'cuisine' ILIKE %s OR rm.recipe_json->>'cuisine' ILIKE %s)")
                 params.extend([f"%{cuisine}%", f"%{cuisine}%"])
-            where_clause = ("WHERE " + " AND ".join(filters)) if filters else ""
+            # recipe_type filter
+            if recipe_type == "ai":
+                filters.append("rm.chef_id IS NULL")
+            elif recipe_type == "chef":
+                filters.append("rm.chef_id IS NOT NULL")
+            elif recipe_type == "draft":
+                filters.append("COALESCE(rm.is_published, TRUE) = FALSE")
+            else:
+                # "all" tab: only show active recipes by default
+                filters.append("COALESCE(rm.is_active, TRUE) = TRUE")
+
+            where_clause = "WHERE " + " AND ".join(filters)
             # date range filter
             if start_date and end_date:
-                where_clause = (where_clause + " AND " if where_clause else "WHERE ") + " (rm.created_at::date BETWEEN %s AND %s)"
+                where_clause += " AND (rm.created_at::date BETWEEN %s AND %s)"
                 params.extend([start_date, end_date])
 
-            count_sql = f"SELECT COUNT(*) AS cnt FROM recipe_master {where_clause}"
+            count_sql = f"SELECT COUNT(*) AS cnt FROM recipe_master rm {where_clause}"
             cur.execute(count_sql, tuple(params))
             total = cur.fetchone()["cnt"]
 
@@ -459,20 +471,27 @@ def list_recipes(request: Request):
 
             select_sql = f"""
                 SELECT rm.id, rm.recipe_key, rm.title, rm.servings, rm.created_at, rm.updated_at, rm.recipe_json,
-                       COALESCE(rrc.likes, 0) AS likes, COALESCE(rrc.dislikes, 0) AS dislikes
+                       rm.chef_id,
+                       COALESCE(rm.is_active, TRUE) AS is_active,
+                       COALESCE(rm.is_published, TRUE) AS is_published,
+                       COALESCE(rrc.likes, 0) AS likes, COALESCE(rrc.dislikes, 0) AS dislikes,
+                       u.full_name AS chef_name
                 FROM recipe_master rm
                 LEFT JOIN recipe_reaction_count rrc ON rrc.recipe_id = rm.id
+                LEFT JOIN chef_profile cp ON cp.id = rm.chef_id
+                LEFT JOIN users u ON u.id = cp.user_id
                 {where_clause}
-                ORDER BY {sort_by} {order}
+                ORDER BY rm.{sort_by} {order}
                 LIMIT %s OFFSET %s
             """
             cur.execute(select_sql, tuple(params) + (per_page, offset))
             rows = cur.fetchall()
-            # map rows to expected shape (include cuisine/difficulty/estimated_time if present)
             results = []
             for r in rows:
                 rj = r.get("recipe_json") or {}
                 meta = rj.get("meta") or {}
+                chef_name = r.get("chef_name")
+                generated_by = meta.get("generated_by") or meta.get("provider") or meta.get("llm") or None
                 results.append({
                     "id": r["id"],
                     "recipe_key": r["recipe_key"],
@@ -483,9 +502,11 @@ def list_recipes(request: Request):
                     "servings": r.get("servings"),
                     "likes": r.get("likes") or 0,
                     "dislikes": r.get("dislikes") or 0,
-                    "owner_name": meta.get("author") or meta.get("creator") or rj.get("author") or None,
-                    "generated_by": meta.get("generated_by") or meta.get("provider") or meta.get("llm") or None,
+                    "owner_name": chef_name or meta.get("author") or meta.get("creator") or rj.get("author") or None,
+                    "generated_by": generated_by,
                     "is_featured": False,
+                    "is_active": r.get("is_active", True),
+                    "is_published": r.get("is_published", True),
                     "cached": True,
                     "created_at": r.get("created_at"),
                     "tags": rj.get("tags") or [],
@@ -533,6 +554,23 @@ def admin_delete_recipe(recipe_id: int, request: Request):
             cur.execute("DELETE FROM recipe_master WHERE id = %s", (recipe_id,))
             conn.commit()
             return {"status": "ok"}
+
+
+@router.post("/recipes/{recipe_id}/toggle-active")
+def admin_toggle_recipe_active(recipe_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COALESCE(is_active, TRUE) AS is_active FROM recipe_master WHERE id = %s", (recipe_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Recipe not found")
+            new_val = not row["is_active"]
+            cur.execute("UPDATE recipe_master SET is_active = %s WHERE id = %s", (new_val, recipe_id))
+            conn.commit()
+            return {"status": "ok", "is_active": new_val}
 
 
 @router.get("/videos")

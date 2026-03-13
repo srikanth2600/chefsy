@@ -295,7 +295,9 @@ def get_chef_recipes(chef_id: int, page: int = 1, per_page: int = 20) -> Tuple[L
             total = cur.fetchone()["cnt"]
             cur.execute(
                 """
-                SELECT id, recipe_key, title, created_at,
+                SELECT id, recipe_key, title, servings, recipe_json,
+                  COALESCE(is_published, TRUE) AS is_published,
+                  created_at,
                   (SELECT COUNT(*) FROM likes WHERE recipe_id = id) AS like_count
                 FROM recipe_master
                 WHERE chef_id = %s
@@ -304,7 +306,102 @@ def get_chef_recipes(chef_id: int, page: int = 1, per_page: int = 20) -> Tuple[L
                 """,
                 (chef_id, per_page, offset),
             )
-            return [dict(r) for r in cur.fetchall()], total
+            results = []
+            for r in cur.fetchall():
+                row = dict(r)
+                rj = row.get("recipe_json") or {}
+                meta = rj.get("meta") or {}
+                nutrition = rj.get("nutrition") or {}
+                results.append({
+                    "id": row["id"],
+                    "recipe_key": row["recipe_key"],
+                    "title": row["title"],
+                    "servings": row.get("servings") or 4,
+                    "cuisine": meta.get("cuisine") or rj.get("cuisine") or "",
+                    "difficulty": meta.get("difficulty") or rj.get("difficulty") or "Moderate",
+                    "cook_time": meta.get("estimated_time") or rj.get("cook_time") or "",
+                    "description": rj.get("description") or "",
+                    "tips": rj.get("tips") or "",
+                    "video_url": rj.get("video_url") or "",
+                    "image_url": rj.get("image_url"),
+                    "ingredients": rj.get("ingredients") or [],
+                    "steps": rj.get("steps") or [],
+                    "calories": str(nutrition["calories"]) if nutrition.get("calories") is not None else "",
+                    "protein": str(nutrition["protein"]) if nutrition.get("protein") is not None else "",
+                    "carbs": str(nutrition["carbs"]) if nutrition.get("carbs") is not None else "",
+                    "fat": str(nutrition["fat"]) if nutrition.get("fat") is not None else "",
+                    "is_published": row.get("is_published", True),
+                    "like_count": row.get("like_count") or 0,
+                    "created_at": str(row.get("created_at", "")),
+                })
+            return results, total
+
+
+def save_chef_recipe(chef_id: int, data: dict) -> int:
+    """Create or update a chef-authored recipe. Returns the recipe id."""
+    import json as _json, uuid as _uuid
+    title = (data.get("title") or "Untitled Recipe").strip()
+    servings = data.get("servings") or 4
+
+    nutrition: dict = {}
+    for key in ("calories", "protein", "carbs", "fat"):
+        val = data.get(key)
+        if val not in (None, "", "null"):
+            try:
+                nutrition[key] = float(val)
+            except (TypeError, ValueError):
+                pass
+
+    recipe_json = {
+        "title": title,
+        "servings": servings,
+        "description": data.get("description") or "",
+        "tips": data.get("tips") or "",
+        "video_url": data.get("video_url") or "",
+        "image_url": data.get("image_url"),
+        "steps": [s for s in (data.get("steps") or []) if str(s).strip()],
+        "ingredients": [
+            {"name": i.get("name", ""), "quantity": i.get("quantity", ""), "unit": i.get("unit", "g")}
+            for i in (data.get("ingredients") or [])
+            if i.get("name", "").strip()
+        ],
+        "nutrition": nutrition,
+        "meta": {
+            "cuisine": data.get("cuisine") or "",
+            "difficulty": data.get("difficulty") or "Moderate",
+            "estimated_time": data.get("cook_time") or "",
+        },
+    }
+    is_published = bool(data.get("is_published", False))
+    recipe_id = data.get("id")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if recipe_id:
+                steps_json = _json.dumps(recipe_json.get("steps", []))
+                cur.execute(
+                    """UPDATE recipe_master
+                       SET title=%s, servings=%s, recipe_json=%s, steps_json=%s, is_published=%s, updated_at=NOW()
+                       WHERE id=%s AND chef_id=%s
+                       RETURNING id""",
+                    (title, servings, _json.dumps(recipe_json), steps_json, is_published, recipe_id, chef_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError(f"Recipe {recipe_id} not found or not owned by chef")
+                rid = row["id"]
+            else:
+                key = str(_uuid.uuid4())[:8]
+                steps_json = _json.dumps(recipe_json.get("steps", []))
+                cur.execute(
+                    """INSERT INTO recipe_master (recipe_key, title, servings, recipe_json, steps_json, chef_id, is_published, is_active)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)
+                       RETURNING id""",
+                    (key, title, servings, _json.dumps(recipe_json), steps_json, chef_id, is_published),
+                )
+                rid = cur.fetchone()["id"]
+        conn.commit()
+    return rid
 
 
 def get_analytics(chef_id: int, user_id: int) -> Dict:

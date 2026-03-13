@@ -7,7 +7,7 @@ from app.chef.schema import (
     ChefPublicOut, ChefFollowOut, ChefReviewCreate,
     ChefRoleCreate, ChefRoleUpdate, ChefRoleAssign,
     CategoryCreate, CategoryUpdate, RecipeCategoryAssign,
-    ReelCreate, ReelUpdate,
+    ReelCreate, ReelUpdate, RecipeSave,
 )
 from app.core.db import get_connection
 
@@ -215,6 +215,20 @@ def my_recipes(
     for r in recipes:
         r["created_at"] = str(r.get("created_at", ""))
     return {"recipes": recipes, "total": total, "page": page, "per_page": per_page}
+
+
+@router.post("/me/recipes")
+def save_my_recipe(payload: RecipeSave, req: Request):
+    """Create or update a chef-authored recipe (draft or published)."""
+    user_id = _require_user(req)
+    chef = repository.get_by_user_id(user_id)
+    if not chef:
+        raise HTTPException(status_code=404, detail="Chef profile not found")
+    try:
+        rid = repository.save_chef_recipe(chef["id"], payload.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"id": rid, "status": "ok"}
 
 
 @router.get("/me/plan-usage")
@@ -427,6 +441,77 @@ def get_chef_recipes(
     for r in recipes:
         r["created_at"] = str(r.get("created_at", ""))
     return {"recipes": recipes, "total": total, "page": page, "per_page": per_page}
+
+
+@router.get("/reels/recent")
+def get_recent_reels_global(per_page: int = Query(20, ge=1, le=50)):
+    """Returns recent active reels from all chefs with chef info, for the find-chef page."""
+    import json as _json
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT cr.id, cr.title, cr.description, cr.hashtags, cr.video_url,
+                       cr.video_file_path, cr.platform, cr.thumbnail, cr.view_count, cr.created_at,
+                       cp.slug AS chef_slug, u.full_name AS chef_name,
+                       cp.avatar_color AS chef_avatar_color, cp.avatar_url AS chef_avatar_url
+                FROM chef_reels cr
+                JOIN chef_profile cp ON cp.id = cr.chef_id
+                JOIN users u ON u.id = cp.user_id
+                WHERE cr.status = 'active'
+                ORDER BY cr.created_at DESC
+                LIMIT %s
+            """, (per_page,))
+            rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["created_at"] = str(r["created_at"])
+        if isinstance(r.get("hashtags"), str):
+            try:
+                r["hashtags"] = _json.loads(r["hashtags"])
+            except Exception:
+                r["hashtags"] = []
+    return {"reels": rows}
+
+
+@router.get("/recipes/recent")
+def get_recent_recipes_global(per_page: int = Query(12, ge=1, le=50)):
+    """Returns recent published recipes from all chefs with chef info, for the find-chef page."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT rm.id, rm.title, rm.servings, rm.recipe_json, rm.created_at,
+                       COALESCE(rrc.likes, 0) AS like_count,
+                       cp.slug AS chef_slug, u.full_name AS chef_name,
+                       cp.avatar_color AS chef_avatar_color, cp.is_verified AS chef_verified
+                FROM recipe_master rm
+                LEFT JOIN recipe_reaction_count rrc ON rrc.recipe_id = rm.id
+                JOIN chef_profile cp ON cp.id = rm.chef_id
+                JOIN users u ON u.id = cp.user_id
+                WHERE COALESCE(rm.is_published, TRUE) = TRUE
+                  AND COALESCE(rm.is_active, TRUE) = TRUE
+                  AND rm.chef_id IS NOT NULL
+                ORDER BY rm.created_at DESC
+                LIMIT %s
+            """, (per_page,))
+            rows = [dict(r) for r in cur.fetchall()]
+    result = []
+    for r in rows:
+        rj = r.get("recipe_json") or {}
+        meta = rj.get("meta") or {}
+        result.append({
+            "id": r["id"],
+            "title": r.get("title") or "",
+            "cuisine": meta.get("cuisine") or "",
+            "difficulty": meta.get("difficulty") or "Moderate",
+            "cook_time": meta.get("estimated_time") or "",
+            "like_count": r["like_count"],
+            "image_url": rj.get("image_url"),
+            "description": rj.get("description") or "",
+            "chef_slug": r["chef_slug"],
+            "chef_name": r["chef_name"],
+            "chef_avatar_color": r["chef_avatar_color"],
+            "chef_verified": r.get("chef_verified") or False,
+        })
+    return {"recipes": result}
 
 
 @router.get("/{slug}/reels")

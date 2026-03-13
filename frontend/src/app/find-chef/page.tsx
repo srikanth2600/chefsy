@@ -421,6 +421,8 @@ function FindChefPage() {
   const [userType, setUserType] = useState<string | null>(null);
   const [chefs, setChefs] = useState<Chef[]>(MOCK_CHEFS);
   const [chefsLoaded, setChefsLoaded] = useState(false);
+  const [apiReels, setApiReels] = useState<any[]>([]);
+  const [apiRecipes, setApiRecipes] = useState<any[]>([]);
 
   const chefsRef = useRef<HTMLDivElement>(null);
   const reelsRef = useRef<HTMLDivElement>(null);
@@ -431,15 +433,16 @@ function FindChefPage() {
   }, []);
 
   useEffect(() => {
-    fetch(`${API_BASE}/chefs?per_page=50`)
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
-        if (data?.chefs?.length) {
-          setChefs((data.chefs as any[]).map(_mapApiChef));
-        }
-        setChefsLoaded(true);
-      })
-      .catch(() => setChefsLoaded(true));
+    Promise.all([
+      fetch(`${API_BASE}/chefs?per_page=50`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/chefs/reels/recent?per_page=20`).then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch(`${API_BASE}/chefs/recipes/recent?per_page=12`).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]).then(([chefsData, reelsData, recipesData]) => {
+      if (chefsData?.chefs?.length) setChefs((chefsData.chefs as any[]).map(_mapApiChef));
+      if (reelsData?.reels?.length) setApiReels(reelsData.reels);
+      if (recipesData?.recipes?.length) setApiRecipes(recipesData.recipes);
+      setChefsLoaded(true);
+    }).catch(() => setChefsLoaded(true));
   }, []);
 
   const filteredChefs = chefs.filter(c =>
@@ -605,29 +608,46 @@ function FindChefPage() {
               5 cards/row desktop · 3 tablet · 2 mobile
               ══════════════════════════════════════════════════════════════ */}
           <div ref={reelsRef} style={{ scrollMarginTop: 72, marginBottom: isDesk ? 56 : 40 }}>
-            <SectionHeader icon="🎬" title="Chef Reels" subtitle={`${allVideos.length} cooking videos`} t={t} />
+            <SectionHeader icon="🎬" title="Chef Reels" subtitle={`${apiReels.length} cooking videos`} t={t} />
 
-            {allVideos.length === 0 ? (
+            {apiReels.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '48px 0', color: t.textTertiary }}>
                 <div style={{ fontSize: 48, opacity: 0.2, marginBottom: 12 }}>🎬</div>
                 <p style={{ fontSize: 14 }}>No reels yet</p>
               </div>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: reelCols, gap: isMob ? 8 : isTab ? 10 : 12 }}>
-                {allVideos.map(({ video, chef }, i) => (
-                  <div key={i} style={{ position: 'relative', borderRadius: 12, overflow: 'hidden', border: `1px solid ${t.border}` }}>
-                    <VideoReelCard
-                      title={video.title} views={video.view_count} duration={video.duration}
-                      chefColor={chef.avatar_color} onPlay={() => setActiveVideo({ video, chef })} t={t}
-                    />
-                    <div
-                      style={{ position: 'absolute', top: 8, left: 8, display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(6px)', borderRadius: 99, padding: '3px 9px 3px 3px', cursor: 'pointer' }}
-                      onClick={() => router.push(`/chef/${chef.slug}`)}>
-                      <Avatar name={chef.name} color={chef.avatar_color} size={18} radius={99} />
-                      <span style={{ fontSize: 9, color: '#F5EFE6', fontWeight: 700 }}>{chef.name.split(' ')[0]}</span>
+                {apiReels.map((reel: any) => {
+                  const isYt = reel.platform === 'youtube' || (reel.video_url || '').includes('youtube') || (reel.video_url || '').includes('youtu.be');
+                  let ytId = '';
+                  if (isYt && reel.video_url) {
+                    try { const u = new URL(reel.video_url); ytId = u.hostname.includes('youtu.be') ? u.pathname.slice(1) : (u.searchParams.get('v') || ''); } catch {}
+                  }
+                  const thumb = ytId ? `https://img.youtube.com/vi/${ytId}/mqdefault.jpg`
+                    : reel.thumbnail ? (reel.thumbnail.startsWith('/') ? `${API_BASE}${reel.thumbnail}` : reel.thumbnail)
+                    : null;
+                  return (
+                    <div key={reel.id} onClick={() => router.push(`/chef/${reel.chef_slug}`)}
+                      style={{ position: 'relative', aspectRatio: '9/14', borderRadius: 12, overflow: 'hidden', cursor: 'pointer', border: `1px solid ${t.border}`, background: `linear-gradient(160deg,${reel.chef_avatar_color || '#DA7756'}55 0%,#111 100%)` }}>
+                      {thumb
+                        ? <img src={thumb} alt={reel.title} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 32, opacity: 0.3 }}>🎬</div>
+                      }
+                      <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(transparent 40%,rgba(0,0,0,0.82))' }} />
+                      <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.18)', border: '1.5px solid rgba(255,255,255,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <span style={{ fontSize: 12, color: '#fff', marginLeft: 3 }}>▶</span>
+                      </div>
+                      <div style={{ position: 'absolute', top: 6, left: 6, display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(0,0,0,0.65)', borderRadius: 99, padding: '2px 8px 2px 2px' }}>
+                        <Avatar name={reel.chef_name || ''} color={reel.chef_avatar_color || '#DA7756'} size={16} radius={99} />
+                        <span style={{ fontSize: 8, color: '#F5EFE6', fontWeight: 700 }}>{(reel.chef_name || '').split(' ')[0]}</span>
+                      </div>
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '4px 7px' }}>
+                        <p style={{ fontSize: 9, color: '#fff', margin: '0 0 2px', fontWeight: 700, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{reel.title}</p>
+                        {reel.view_count > 0 && <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.7)' }}>👁 {reel.view_count}</span>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -640,12 +660,44 @@ function FindChefPage() {
               4 cards/row desktop · 2 tablet · 1 mobile
               ══════════════════════════════════════════════════════════════ */}
           <div ref={recipesRef} style={{ scrollMarginTop: 72, marginBottom: isDesk ? 56 : 40 }}>
-            <SectionHeader icon="🍳" title="Popular Recipes" subtitle={`${MOCK_RECIPES.length} handpicked recipes`} t={t} />
-            <div style={{ display: 'grid', gridTemplateColumns: recipeCols, gap: isMob ? 14 : isTab ? 16 : 20 }}>
-              {MOCK_RECIPES.map(r => (
-                <RecipeCard key={r.id} recipe={r} onClick={() => setOpenRecipe(r)} />
-              ))}
-            </div>
+            <SectionHeader icon="🍳" title="Popular Recipes" subtitle={`${apiRecipes.length || MOCK_RECIPES.length} handpicked recipes`} t={t} />
+            {apiRecipes.length > 0 ? (
+              <div style={{ display: 'grid', gridTemplateColumns: recipeCols, gap: isMob ? 14 : isTab ? 16 : 20 }}>
+                {apiRecipes.map((r: any) => {
+                  const diffColor: Record<string, string> = { Easy: '#10B981', Moderate: '#F59E0B', Hard: '#EF4444', Expert: '#8B5CF6' };
+                  const dc = diffColor[r.difficulty] || '#888';
+                  return (
+                    <div key={r.id} onClick={() => router.push(`/chef/${r.chef_slug}`)}
+                      style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 16, overflow: 'hidden', cursor: 'pointer', transition: 'border-color 0.15s' }}
+                      onMouseEnter={e => (e.currentTarget.style.borderColor = t.accent)}
+                      onMouseLeave={e => (e.currentTarget.style.borderColor = t.border)}>
+                      <div style={{ height: 120, background: r.image_url ? `url(${r.image_url}) center/cover` : `linear-gradient(135deg,${r.chef_avatar_color || '#DA7756'}44,${r.chef_avatar_color || '#DA7756'}22)`, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        {!r.image_url && <span style={{ fontSize: 40, opacity: 0.2 }}>🍳</span>}
+                        {r.difficulty && <div style={{ position: 'absolute', top: 8, right: 8, fontSize: 9, fontWeight: 700, padding: '2px 8px', borderRadius: 99, background: `${dc}22`, color: dc, border: `1px solid ${dc}44` }}>{r.difficulty}</div>}
+                      </div>
+                      <div style={{ padding: '10px 13px 13px' }}>
+                        <p style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary, margin: '0 0 5px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</p>
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                          {r.cuisine && <span style={{ fontSize: 10, color: t.textTertiary }}>🍽 {r.cuisine}</span>}
+                          {r.cook_time && <span style={{ fontSize: 10, color: t.textTertiary }}>⏱ {r.cook_time}</span>}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingTop: 8, borderTop: `1px solid ${t.border}` }}>
+                          <Avatar name={r.chef_name || ''} color={r.chef_avatar_color || '#DA7756'} size={20} radius={6} />
+                          <span style={{ fontSize: 11, color: t.textSecondary, fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.chef_name}</span>
+                          <span style={{ fontSize: 10, color: '#F59E0B' }}>♥ {r.like_count}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: recipeCols, gap: isMob ? 14 : isTab ? 16 : 20 }}>
+                {MOCK_RECIPES.map(r => (
+                  <RecipeCard key={r.id} recipe={r} onClick={() => setOpenRecipe(r)} />
+                ))}
+              </div>
+            )}
           </div>
 
           {/* ── JOIN CTA ──────────────────────────────────────────────── */}
