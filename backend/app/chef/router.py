@@ -2,13 +2,6 @@ from fastapi import APIRouter, HTTPException, Request, Query, UploadFile, File, 
 from typing import Optional
 from pydantic import BaseModel
 import uuid, pathlib
-
-
-class MessageCreate(BaseModel):
-    sender_name: str
-    sender_email: str = ""
-    subject: str = ""
-    message: str
 from app.chef import service, repository
 from app.chef.schema import (
     ChefProfileCreate, ChefProfileUpdate,
@@ -27,6 +20,13 @@ _MAX_BANNER = 5 * 1024 * 1024     # 5 MB
 _MAX_REEL   = 100 * 1024 * 1024   # 100 MB
 
 router = APIRouter()
+
+
+class MessageCreate(BaseModel):
+    sender_name: str
+    sender_email: str = ""
+    subject: str = ""
+    message: str
 
 
 def _get_user_id(req: Request) -> Optional[int]:
