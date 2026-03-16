@@ -4,7 +4,7 @@
 > the full project context, technical state, architecture, and development rules — before
 > making any changes or implementing new features.
 >
-> **Last Updated:** March 2026 (revised) — Chef Reels feature fully implemented (backend + dashboard). Registration bug fixed.
+> **Last Updated:** March 16 2026 — Chef Reels fully implemented. Like/dislike persistence fixed (missing auth header on reactions fetch). Recipe print (custom window + Chefsy logo) and social share popup (WhatsApp/Twitter/Facebook/Copy) added to RecipeMarkdown & RecipeHeader. Brand renamed to **Chefsy** in all print templates.
 > **Environment:** All development and testing is done on **localhost** (local machine).
 > Deploy only after local testing is confirmed working.
 
@@ -452,6 +452,7 @@ POST /auth/dev-setup?email=test@local
 | 11 | `frontend/src/app/page.tsx` | Slug availability check now works via `GET /chefs/{slug}` (404 = available) | **FIXED Mar 2026** | — |
 | 12 | `backend/app/chef/router.py` | Static `/me/` routes MUST appear before `/{slug}` catch-all — was causing all `/me/` calls to return 404 | **FIXED Mar 2026** | — |
 | 13 | `chef_profile` DB row | Users who registered before chef module existed have no `chef_profile` row — all `/me/` calls return 404 | Fixed per-user via DB script | HIGH |
+| 14 | `frontend/src/components/RecipeMarkdown.tsx` | Reactions fetch on mount was missing `Authorization` header — backend could not identify user, so `user_reaction` was always null and like/dislike state reset on every page refresh | **FIXED Mar 16 2026** | — |
 
 ### Registration Fix Details (Bug #3)
 - **Root cause**: `email-validator` 2.x rejects emails without a proper domain (e.g. `user@localhost`, `test@local`). Frontend silently discarded the 422 error body so users saw a generic "Registration failed." with no explanation.
@@ -475,7 +476,7 @@ POST /auth/dev-setup?email=test@local
 | Find Chef `/find-chef` | ⚠️ Mock data | Needs wiring to `GET /chefs`, `/chefs/reels/recent`, `/chefs/recipes/recent` |
 | Chef Reels (backend + dashboard) | ✅ Working | Full CRUD: `/chef-dashboard/reels`; platform detection; file upload + URL embed |
 | Chef subdomain (`slug.chefsy.ai`) | ❌ Not built | Requires wildcard SSL + DNS config |
-| Recipe reactions (like/dislike) | ✅ Schema ready | API in routes.py |
+| Recipe reactions (like/dislike) | ✅ Working | Like/dislike persists across refresh; social share popup (WhatsApp/Twitter/Facebook/Copy); custom print window with logo |
 | Step-level reactions | ✅ Schema ready | API in routes.py |
 | Bookmarks / Likes | ✅ Schema ready | API in routes.py |
 | Nutrition (IFCT) | ⚠️ Partial | Stored in DB, not fully automated |

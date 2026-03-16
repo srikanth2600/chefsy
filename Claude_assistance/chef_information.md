@@ -1,6 +1,6 @@
 # Chef Module — Architecture & Development Reference
 
-> **Last Updated:** March 2026 (revised) — Chef Reels feature fully implemented (backend + dashboard frontend).
+> **Last Updated:** March 16 2026 — Chef Reels fully implemented. Brand name updated to **Chefsy** in all print templates. No schema/endpoint changes today.
 > **Status:** Backend fully implemented. Frontend dashboard wired to real API (including Reels). Find-chef page and `/chef/[slug]` public page still use mock data.
 
 ---
