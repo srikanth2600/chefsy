@@ -25,6 +25,8 @@ const NAV = [
     items: [
       { id: 'users',      href: '/adminpanel/users',      icon: '◎',  label: 'All Users' },
       { id: 'chefs',      href: '/adminpanel/chefs',      icon: '👨‍🍳',  label: 'Chefs / Pros' },
+      { id: 'reviews',    href: '/adminpanel/reviews',    icon: '⭐',  label: 'Reviews' },
+      { id: 'messages',   href: '/adminpanel/messages',   icon: '💬',  label: 'Messages' },
       { id: 'feedback',   href: '/adminpanel/feedback',   icon: '✦',  label: 'Feedback & Ratings' },
     ],
   },

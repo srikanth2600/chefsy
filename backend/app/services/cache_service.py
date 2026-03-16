@@ -75,6 +75,13 @@ def get_cached_recipe(recipe_key: str, user_id: int | None, title_hint: str | No
                 "nutrition": r["nutrition_json"] or {},
             })
 
+        # merge structured JSON if present
+        master_json = row.get("recipe_json") or {}
+
+        # Fallback: if ingredient_map was empty (normalization failed), use recipe_json
+        if not ingredients and isinstance(master_json, dict):
+            ingredients = master_json.get("ingredients") or []
+
         response_dict: Dict[str, Any] = {
             "recipe_key": recipe_key,
             "recipe_id": recipe_id,
@@ -86,8 +93,6 @@ def get_cached_recipe(recipe_key: str, user_id: int | None, title_hint: str | No
             "cached": True,
             "recipe_image_url": row.get("image_path") or "",
         }
-        # merge structured JSON if present
-        master_json = row.get("recipe_json") or {}
         if isinstance(master_json, dict):
             for k in ("description", "tips", "meta", "nutrition", "tags", "ai_context"):
                 if k in master_json:

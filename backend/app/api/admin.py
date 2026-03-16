@@ -949,3 +949,156 @@ def admin_delete_reel(reel_id: int, request: Request):
     chef_repo.delete_reel(reel_id)
     return {"status": "ok"}
 
+
+# ─── Admin: Reviews ───────────────────────────────────────────────────────────
+
+@router.get("/reviews")
+def admin_list_reviews(request: Request):
+    """All recipe reviews across all chefs, with optional filters."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    q = (request.query_params.get("q") or "").strip()
+    chef_id = request.query_params.get("chef_id")
+    try:
+        page = max(1, int(request.query_params.get("page") or "1"))
+        per_page = max(1, min(100, int(request.query_params.get("per_page") or "20")))
+    except ValueError:
+        page, per_page = 1, 20
+    offset = (page - 1) * per_page
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            filters = ["1=1"]
+            params: list = []
+            if chef_id:
+                try:
+                    filters.append("cp.id = %s")
+                    params.append(int(chef_id))
+                except ValueError:
+                    pass
+            if q:
+                like = f"%{q}%"
+                filters.append("(u.full_name ILIKE %s OR rm.title ILIKE %s OR rr.review_text ILIKE %s)")
+                params.extend([like, like, like])
+            where = "WHERE " + " AND ".join(filters)
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS cnt
+                FROM recipe_reviews rr
+                JOIN recipe_master rm ON rm.id = rr.recipe_id
+                LEFT JOIN chef_profile cp ON cp.id = rm.chef_id
+                LEFT JOIN users u ON u.id = rr.user_id
+                {where}
+                """,
+                tuple(params),
+            )
+            total = cur.fetchone()["cnt"]
+            cur.execute(
+                f"""
+                SELECT rr.id, rr.rating, rr.review_text, rr.created_at,
+                       rm.id AS recipe_id, rm.title AS recipe_title,
+                       COALESCE(u.full_name, rr.user_id::text) AS reviewer_name,
+                       u.email AS reviewer_email,
+                       COALESCE(chef_user.full_name, '') AS chef_name,
+                       cp.id AS chef_id
+                FROM recipe_reviews rr
+                JOIN recipe_master rm ON rm.id = rr.recipe_id
+                LEFT JOIN chef_profile cp ON cp.id = rm.chef_id
+                LEFT JOIN users u ON u.id = rr.user_id
+                LEFT JOIN users chef_user ON chef_user.id = cp.user_id
+                {where}
+                ORDER BY rr.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params) + (per_page, offset),
+            )
+            reviews = [dict(r) for r in cur.fetchall()]
+    for r in reviews:
+        r["created_at"] = str(r["created_at"])
+    return {"reviews": reviews, "total": total, "page": page, "per_page": per_page}
+
+
+@router.delete("/reviews/{review_id}")
+def admin_delete_review(review_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM recipe_reviews WHERE id = %s", (review_id,))
+            conn.commit()
+    return {"status": "ok"}
+
+
+# ─── Admin: Messages ──────────────────────────────────────────────────────────
+
+@router.get("/messages")
+def admin_list_messages(request: Request):
+    """All chef inbox messages across all chefs."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    q = (request.query_params.get("q") or "").strip()
+    chef_id = request.query_params.get("chef_id")
+    is_read = request.query_params.get("is_read")
+    try:
+        page = max(1, int(request.query_params.get("page") or "1"))
+        per_page = max(1, min(100, int(request.query_params.get("per_page") or "20")))
+    except ValueError:
+        page, per_page = 1, 20
+    offset = (page - 1) * per_page
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            filters = ["1=1"]
+            params: list = []
+            if chef_id:
+                try:
+                    filters.append("cm.chef_id = %s")
+                    params.append(int(chef_id))
+                except ValueError:
+                    pass
+            if is_read in ("true", "false"):
+                filters.append("cm.is_read = %s")
+                params.append(is_read == "true")
+            if q:
+                like = f"%{q}%"
+                filters.append("(cm.sender_name ILIKE %s OR cm.subject ILIKE %s OR cm.message ILIKE %s)")
+                params.extend([like, like, like])
+            where = "WHERE " + " AND ".join(filters)
+            cur.execute(
+                f"SELECT COUNT(*) AS cnt FROM chef_messages cm {where}",
+                tuple(params),
+            )
+            total = cur.fetchone()["cnt"]
+            cur.execute(
+                f"""
+                SELECT cm.id, cm.sender_name, cm.sender_email, cm.subject, cm.message,
+                       cm.is_read, cm.created_at,
+                       COALESCE(chef_user.full_name, '') AS chef_name,
+                       cp.id AS chef_id
+                FROM chef_messages cm
+                LEFT JOIN chef_profile cp ON cp.id = cm.chef_id
+                LEFT JOIN users chef_user ON chef_user.id = cp.user_id
+                {where}
+                ORDER BY cm.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                tuple(params) + (per_page, offset),
+            )
+            messages = [dict(r) for r in cur.fetchall()]
+    for m in messages:
+        m["created_at"] = str(m["created_at"])
+    return {"messages": messages, "total": total, "page": page, "per_page": per_page}
+
+
+@router.delete("/messages/{message_id}")
+def admin_delete_message(message_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM chef_messages WHERE id = %s", (message_id,))
+            conn.commit()
+    return {"status": "ok"}
+

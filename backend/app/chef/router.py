@@ -1,6 +1,14 @@
 from fastapi import APIRouter, HTTPException, Request, Query, UploadFile, File, Form
 from typing import Optional
+from pydantic import BaseModel
 import uuid, pathlib
+
+
+class MessageCreate(BaseModel):
+    sender_name: str
+    sender_email: str = ""
+    subject: str = ""
+    message: str
 from app.chef import service, repository
 from app.chef.schema import (
     ChefProfileCreate, ChefProfileUpdate,
@@ -262,6 +270,108 @@ def assign_my_roles(payload: ChefRoleAssign, req: Request):
     return {"status": "ok"}
 
 
+@router.get("/me/reviews")
+def my_reviews(
+    req: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+):
+    """All recipe reviews received by this chef across all their recipes."""
+    user_id = _require_user(req)
+    chef = repository.get_by_user_id(user_id)
+    if not chef:
+        raise HTTPException(status_code=404, detail="Chef profile not found")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT rr.id, rr.rating, rr.review_text, rr.created_at,
+                       rm.title AS recipe_title, rm.id AS recipe_id,
+                       COALESCE(u.full_name, rr.user_id::text) AS reviewer_name
+                FROM recipe_reviews rr
+                JOIN recipe_master rm ON rm.id = rr.recipe_id
+                LEFT JOIN users u ON u.id = rr.user_id
+                WHERE rm.chef_id = %s
+                ORDER BY rr.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (chef["id"], per_page, (page - 1) * per_page),
+            )
+            reviews = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM recipe_reviews rr
+                JOIN recipe_master rm ON rm.id = rr.recipe_id
+                WHERE rm.chef_id = %s
+                """,
+                (chef["id"],),
+            )
+            total = cur.fetchone()["cnt"]
+    for r in reviews:
+        r["created_at"] = str(r["created_at"])
+    return {"reviews": reviews, "total": total, "page": page, "per_page": per_page}
+
+
+@router.get("/me/messages")
+def my_messages(
+    req: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+):
+    """Inbox of messages sent to this chef."""
+    user_id = _require_user(req)
+    chef = repository.get_by_user_id(user_id)
+    if not chef:
+        raise HTTPException(status_code=404, detail="Chef profile not found")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT cm.id, cm.sender_name, cm.sender_email, cm.subject,
+                       cm.message, cm.is_read, cm.created_at,
+                       COALESCE(u.full_name, cm.sender_name) AS user_full_name
+                FROM chef_messages cm
+                LEFT JOIN users u ON u.id = cm.user_id
+                WHERE cm.chef_id = %s
+                ORDER BY cm.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                (chef["id"], per_page, (page - 1) * per_page),
+            )
+            messages = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM chef_messages WHERE chef_id = %s",
+                (chef["id"],),
+            )
+            total = cur.fetchone()["cnt"]
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM chef_messages WHERE chef_id = %s AND is_read = FALSE",
+                (chef["id"],),
+            )
+            unread = cur.fetchone()["cnt"]
+    for m in messages:
+        m["created_at"] = str(m["created_at"])
+    return {"messages": messages, "total": total, "unread": unread, "page": page, "per_page": per_page}
+
+
+@router.put("/me/messages/{message_id}/read")
+def mark_message_read(message_id: int, req: Request):
+    """Mark a message as read."""
+    user_id = _require_user(req)
+    chef = repository.get_by_user_id(user_id)
+    if not chef:
+        raise HTTPException(status_code=404, detail="Chef profile not found")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE chef_messages SET is_read = TRUE WHERE id = %s AND chef_id = %s",
+                (message_id, chef["id"]),
+            )
+        conn.commit()
+    return {"status": "ok"}
+
+
 @router.get("/me/categories")
 def my_categories(req: Request):
     user_id = _require_user(req)
@@ -506,6 +616,10 @@ def get_recent_recipes_global(per_page: int = Query(12, ge=1, le=50)):
             "like_count": r["like_count"],
             "image_url": rj.get("image_url"),
             "description": rj.get("description") or "",
+            "ingredients": rj.get("ingredients") or [],
+            "steps": rj.get("steps") or [],
+            "tips": rj.get("tips") or "",
+            "hashtags": rj.get("hashtags") or [],
             "chef_slug": r["chef_slug"],
             "chef_name": r["chef_name"],
             "chef_avatar_color": r["chef_avatar_color"],
@@ -553,6 +667,35 @@ def follow_chef(slug: str, req: Request):
         return service.follow_toggle(slug, user_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{slug}/message")
+def send_message(slug: str, payload: MessageCreate, req: Request):
+    """User sends a message to a chef's inbox."""
+    user_id = _get_user_id(req)  # optional auth
+    chef = repository.get_by_slug(slug)
+    if not chef:
+        raise HTTPException(status_code=404, detail="Chef not found")
+    if not payload.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chef_messages (chef_id, user_id, sender_name, sender_email, subject, message)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    chef["id"],
+                    user_id,
+                    payload.sender_name,
+                    payload.sender_email,
+                    payload.subject,
+                    payload.message,
+                ),
+            )
+        conn.commit()
+    return {"status": "ok"}
 
 
 @router.post("/{slug}/reviews")

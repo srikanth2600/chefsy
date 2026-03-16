@@ -21,7 +21,8 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     pathname?.startsWith('/adminpanel') ||
     pathname?.startsWith('/chef') ||
     pathname?.startsWith('/chef-dashboard') ||
-    pathname?.startsWith('/find-chef')
+    pathname?.startsWith('/find-chef') ||
+    pathname?.startsWith('/upgrade')
   ) {
     return <>{children}</>;
   }
@@ -102,7 +103,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
       </div>
 
       <div style={{ flexShrink: 0, padding: drawerOpen ? '12px' : '12px 8px', borderTop: '1px solid var(--border)' }}>
-        <button style={{ width: '100%', padding: drawerOpen ? '10px 16px' : '10px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,var(--claude-orange),#C45E3A)', color: '#fff', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'inherit', cursor: 'pointer', marginBottom: 10 }}>
+        <button onClick={() => router.push('/upgrade')} style={{ width: '100%', padding: drawerOpen ? '10px 16px' : '10px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,var(--claude-orange),#C45E3A)', color: '#fff', fontSize: 12, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', fontFamily: 'inherit', cursor: 'pointer', marginBottom: 10 }}>
           {drawerOpen ? '✦ Upgrade to Pro' : '✦'}
         </button>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px', borderRadius: 10, justifyContent: drawerOpen ? 'flex-start' : 'center' }}>

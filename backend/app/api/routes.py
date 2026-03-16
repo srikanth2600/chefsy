@@ -839,9 +839,19 @@ def _chat_impl(request: ChatRequest, http_request: Request, module: str | None =
         }
         master_json = recipe_row.get("recipe_json") or {}
         if isinstance(master_json, dict):
-            for k in ("description", "tips", "meta", "nutrition", "tags", "ai_context"):
-                if k in master_json:
+            # Only fill in fields that are missing/empty — never overwrite fresh generated data
+            # (master_json may be stale due to COALESCE keeping old recipe_json on conflict)
+            for k in ("description", "meta", "nutrition", "tags", "ai_context"):
+                if k in master_json and not response_dict.get(k):
                     response_dict[k] = master_json.get(k)
+            # tips: fresh generated takes priority; only fall back to master_json if tips is empty
+            if not response_dict.get("tips"):
+                response_dict["tips"] = master_json.get("tips") or []
+            # ingredients: prefer ingredient_map → fresh generated → stale master_json
+            if not response_dict.get("ingredients"):
+                response_dict["ingredients"] = (
+                    generated.get("ingredients") or master_json.get("ingredients") or []
+                )
 
         logger.info("[CHAT] returning generated recipe chat_id=%s recipe_id=%s", chat_id, recipe_id)
         return _build_chat_response(chat_id, response_dict, {"x-llm-generation": "true"}, include_videos=request.include_videos)
@@ -1263,6 +1273,101 @@ def delete_reaction(recipe_key: str, request: Request):
             conn.commit()
             return {"status": "ok", "likes": likes, "dislikes": dislikes}
 
+
+
+@router.post("/recipes/{recipe_key}/review")
+async def post_recipe_review(recipe_key: str, request: Request):
+    """Submit or update a recipe review (rating 1-5 + optional text). Auth required. One review per user per recipe."""
+    user_id = _get_user_from_request(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    rating = payload.get("rating")
+    review_text = (payload.get("review_text") or "").strip()
+    if not rating or not (1 <= int(rating) <= 5):
+        raise HTTPException(status_code=400, detail="Rating must be 1-5")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM recipe_master WHERE recipe_key = %s", (recipe_key,))
+            r = cur.fetchone()
+            if not r:
+                raise HTTPException(status_code=404, detail="Recipe not found")
+            recipe_id = r["id"]
+            cur.execute(
+                """
+                INSERT INTO recipe_reviews (user_id, recipe_id, rating, review_text)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, recipe_id) DO UPDATE
+                  SET rating = EXCLUDED.rating, review_text = EXCLUDED.review_text, updated_at = NOW()
+                """,
+                (user_id, recipe_id, int(rating), review_text or None),
+            )
+            cur.execute(
+                "SELECT ROUND(AVG(rating)::numeric, 2) AS avg, COUNT(*) AS cnt FROM recipe_reviews WHERE recipe_id = %s",
+                (recipe_id,),
+            )
+            row = cur.fetchone() or {}
+            conn.commit()
+            return {
+                "avg_rating": float(row["avg"]) if row.get("avg") else float(rating),
+                "review_count": row.get("cnt", 1),
+            }
+
+
+@router.get("/recipes/{recipe_key}/reviews")
+def get_recipe_reviews(recipe_key: str):
+    """Get all reviews for a recipe (public)."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM recipe_master WHERE recipe_key = %s", (recipe_key,))
+            r = cur.fetchone()
+            if not r:
+                raise HTTPException(status_code=404, detail="Recipe not found")
+            recipe_id = r["id"]
+            cur.execute(
+                """
+                SELECT rr.rating, rr.review_text, rr.created_at,
+                       COALESCE(u.username, 'Anonymous') AS user_name
+                FROM recipe_reviews rr
+                LEFT JOIN users u ON u.id = rr.user_id
+                WHERE rr.recipe_id = %s
+                ORDER BY rr.created_at DESC
+                LIMIT 50
+                """,
+                (recipe_id,),
+            )
+            reviews = [dict(row) for row in cur.fetchall()]
+            for rv in reviews:
+                rv["created_at"] = str(rv.get("created_at", ""))
+            cur.execute(
+                "SELECT ROUND(AVG(rating)::numeric, 2) AS avg, COUNT(*) AS cnt FROM recipe_reviews WHERE recipe_id = %s",
+                (recipe_id,),
+            )
+            row = cur.fetchone() or {}
+            return {
+                "reviews": reviews,
+                "avg_rating": float(row["avg"]) if row.get("avg") else None,
+                "review_count": row.get("cnt", 0),
+            }
+
+
+@router.post("/recipes/{recipe_key}/view")
+def increment_recipe_view(recipe_key: str):
+    """Increment view count for a recipe. No auth required — fire-and-forget."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE recipe_master SET view_count = view_count + 1 WHERE recipe_key = %s RETURNING id, view_count",
+                (recipe_key,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+            if not row:
+                raise HTTPException(status_code=404, detail="Recipe not found")
+            return {"view_count": row["view_count"]}
 
 
 @router.post("/youtube/save")

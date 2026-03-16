@@ -22,6 +22,9 @@ export interface Chef {
   instagram_url?: string;
   website_url?: string;
   plan: 'free' | 'pro';
+  like_count?: number;
+  dislike_count?: number;
+  reel_count?: number;
   appearance_theme?: AppearanceTheme;
   videos?: ChefVideo[];
   experience_years?: number | null;

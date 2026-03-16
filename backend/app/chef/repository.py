@@ -153,8 +153,12 @@ def list_chefs(
                 f"""
                 SELECT cp.id, cp.slug, u.full_name AS name, cp.designation,
                   cp.cuisine_speciality, cp.location, cp.avatar_color, cp.avatar_url,
+                  cp.banner_url, cp.follower_count,
                   cp.is_verified, cp.is_featured, cp.plan, cp.rating, cp.review_count,
-                  (SELECT COUNT(*) FROM recipe_master rm WHERE rm.chef_id = cp.id) AS recipe_count
+                  (SELECT COUNT(*) FROM recipe_master rm WHERE rm.chef_id = cp.id) AS recipe_count,
+                  (SELECT COUNT(*) FROM chef_reels cr WHERE cr.chef_id = cp.id) AS reel_count,
+                  (SELECT COALESCE(SUM(rrc.likes),0) FROM recipe_reaction_count rrc JOIN recipe_master rm2 ON rm2.id = rrc.recipe_id WHERE rm2.chef_id = cp.id) AS like_count,
+                  (SELECT COALESCE(SUM(rrc.dislikes),0) FROM recipe_reaction_count rrc JOIN recipe_master rm3 ON rm3.id = rrc.recipe_id WHERE rm3.chef_id = cp.id) AS dislike_count
                 FROM chef_profile cp
                 JOIN users u ON u.id = cp.user_id
                 WHERE {where}
@@ -295,13 +299,24 @@ def get_chef_recipes(chef_id: int, page: int = 1, per_page: int = 20) -> Tuple[L
             total = cur.fetchone()["cnt"]
             cur.execute(
                 """
-                SELECT id, recipe_key, title, servings, recipe_json,
-                  COALESCE(is_published, TRUE) AS is_published,
-                  created_at,
-                  (SELECT COUNT(*) FROM likes WHERE recipe_id = id) AS like_count
-                FROM recipe_master
-                WHERE chef_id = %s
-                ORDER BY created_at DESC
+                SELECT rm.id, rm.recipe_key, rm.title, rm.servings, rm.recipe_json,
+                  COALESCE(rm.is_published, TRUE) AS is_published,
+                  rm.created_at,
+                  COALESCE(rrc.likes, 0)    AS like_count,
+                  COALESCE(rrc.dislikes, 0) AS dislike_count,
+                  COALESCE(rev.review_count, 0) AS review_count,
+                  rev.avg_rating
+                FROM recipe_master rm
+                LEFT JOIN recipe_reaction_count rrc ON rrc.recipe_id = rm.id
+                LEFT JOIN (
+                  SELECT recipe_id,
+                         COUNT(*) AS review_count,
+                         ROUND(AVG(rating)::numeric, 2) AS avg_rating
+                  FROM recipe_reviews
+                  GROUP BY recipe_id
+                ) rev ON rev.recipe_id = rm.id
+                WHERE rm.chef_id = %s
+                ORDER BY rm.created_at DESC
                 LIMIT %s OFFSET %s
                 """,
                 (chef_id, per_page, offset),
@@ -332,6 +347,9 @@ def get_chef_recipes(chef_id: int, page: int = 1, per_page: int = 20) -> Tuple[L
                     "fat": str(nutrition["fat"]) if nutrition.get("fat") is not None else "",
                     "is_published": row.get("is_published", True),
                     "like_count": row.get("like_count") or 0,
+                    "dislike_count": row.get("dislike_count") or 0,
+                    "review_count": row.get("review_count") or 0,
+                    "avg_rating": float(row["avg_rating"]) if row.get("avg_rating") is not None else None,
                     "created_at": str(row.get("created_at", "")),
                 })
             return results, total
@@ -420,11 +438,9 @@ def get_analytics(chef_id: int, user_id: int) -> Dict:
 
             cur.execute(
                 """
-                SELECT COALESCE(SUM(l.cnt), 0) AS total_likes
+                SELECT COALESCE(SUM(rrc.likes), 0) AS total_likes
                 FROM recipe_master rm
-                LEFT JOIN (
-                  SELECT recipe_id, COUNT(*) AS cnt FROM likes GROUP BY recipe_id
-                ) l ON l.recipe_id = rm.id
+                LEFT JOIN recipe_reaction_count rrc ON rrc.recipe_id = rm.id
                 WHERE rm.chef_id = %s
                 """,
                 (chef_id,),
@@ -432,17 +448,23 @@ def get_analytics(chef_id: int, user_id: int) -> Dict:
             total_likes = cur.fetchone()["total_likes"]
 
             cur.execute(
-                "SELECT COUNT(*) AS cnt FROM videos WHERE user_id = %s AND status = 'approved'",
-                (user_id,),
+                "SELECT COUNT(*) AS cnt FROM chef_reels WHERE chef_id = %s",
+                (chef_id,),
             )
-            video_count = cur.fetchone()["cnt"]
+            reel_count = cur.fetchone()["cnt"]
+
+            cur.execute(
+                "SELECT COALESCE(SUM(view_count), 0) AS total_views FROM recipe_master WHERE chef_id = %s",
+                (chef_id,),
+            )
+            recipe_views = cur.fetchone()["total_views"]
 
             return {
-                "profile_views": base.get("profile_views", 0),
-                "total_recipe_views": 0,
+                "profile_views": int(base.get("profile_views", 0)) + int(recipe_views),
+                "total_recipe_views": int(recipe_views),
                 "total_likes": int(total_likes),
                 "total_recipes": int(recipe_count),
-                "total_videos": int(video_count),
+                "total_reels": int(reel_count),
                 "follower_count": base.get("follower_count", 0),
                 "review_count": base.get("review_count", 0),
                 "rating": float(base["rating"]) if base.get("rating") else None,

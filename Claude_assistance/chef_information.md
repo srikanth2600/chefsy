@@ -1,7 +1,7 @@
 # Chef Module — Architecture & Development Reference
 
-> **Last Updated:** March 2026
-> **Status:** Backend fully implemented. Frontend dashboard wired to real API. Find-chef page still uses mock data.
+> **Last Updated:** March 2026 (revised) — Chef Reels feature fully implemented (backend + dashboard frontend).
+> **Status:** Backend fully implemented. Frontend dashboard wired to real API (including Reels). Find-chef page and `/chef/[slug]` public page still use mock data.
 
 ---
 
@@ -92,41 +92,72 @@ CREATE TABLE IF NOT EXISTS chef_review (
 );
 ```
 
-### `chef_role` & `chef_profile_role`
+### `chef_roles` & `chef_role_mapping`
 ```sql
 -- Roles catalogue (e.g. "Executive Chef", "Pastry Chef")
-CREATE TABLE IF NOT EXISTS chef_role (
+CREATE TABLE IF NOT EXISTS chef_roles (
   id          SERIAL PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
   description TEXT,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Many-to-many: chef ↔ roles
-CREATE TABLE IF NOT EXISTS chef_profile_role (
-  chef_id INTEGER NOT NULL REFERENCES chef_profile(id) ON DELETE CASCADE,
-  role_id INTEGER NOT NULL REFERENCES chef_role(id) ON DELETE CASCADE,
-  PRIMARY KEY (chef_id, role_id)
+CREATE TABLE IF NOT EXISTS chef_role_mapping (
+  id       SERIAL PRIMARY KEY,
+  chef_id  INTEGER NOT NULL REFERENCES chef_profile(id) ON DELETE CASCADE,
+  role_id  INTEGER NOT NULL REFERENCES chef_roles(id) ON DELETE CASCADE,
+  UNIQUE (chef_id, role_id)
 );
 ```
 
-### `recipe_category` & `recipe_category_map`
+### `categories`, `chef_category_mapping` & `recipe_category_map`
 ```sql
--- Hierarchical recipe categories (parent_id = NULL for top-level)
-CREATE TABLE IF NOT EXISTS recipe_category (
+-- Hierarchical categories (parent_id = NULL for top-level; used for both chef specialities and recipe tags)
+CREATE TABLE IF NOT EXISTS categories (
   id        SERIAL PRIMARY KEY,
   name      TEXT NOT NULL,
   slug      TEXT NOT NULL UNIQUE,
-  parent_id INTEGER REFERENCES recipe_category(id) ON DELETE SET NULL,
-  level     INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+  level     INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Many-to-many: recipe ↔ categories
+-- Chef-Category mapping: which cuisine categories a chef specialises in
+CREATE TABLE IF NOT EXISTS chef_category_mapping (
+  id          SERIAL PRIMARY KEY,
+  chef_id     INTEGER NOT NULL REFERENCES chef_profile(id) ON DELETE CASCADE,
+  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  UNIQUE (chef_id, category_id)
+);
+
+-- Recipe-Category mapping: which category tags a recipe belongs to
 CREATE TABLE IF NOT EXISTS recipe_category_map (
+  id          SERIAL PRIMARY KEY,
   recipe_id   INTEGER NOT NULL REFERENCES recipe_master(id) ON DELETE CASCADE,
-  category_id INTEGER NOT NULL REFERENCES recipe_category(id) ON DELETE CASCADE,
-  PRIMARY KEY (recipe_id, category_id)
+  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  UNIQUE (recipe_id, category_id)
+);
+```
+
+### `chef_reels`
+```sql
+CREATE TABLE IF NOT EXISTS chef_reels (
+  id               SERIAL PRIMARY KEY,
+  chef_id          INTEGER NOT NULL REFERENCES chef_profile(id) ON DELETE CASCADE,
+  title            TEXT NOT NULL,
+  description      TEXT,
+  hashtags         JSONB NOT NULL DEFAULT '[]',
+  video_url        TEXT,                    -- external embed link (YouTube, Instagram, etc.)
+  video_file_path  TEXT,                    -- /media/reels/<filename> for direct uploads
+  platform         TEXT,                    -- 'youtube' | 'facebook' | 'instagram' | 'vimeo' | 'direct' | 'upload' | 'other'
+  thumbnail        TEXT,
+  status           TEXT NOT NULL DEFAULT 'active',
+  view_count       INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
 
@@ -173,6 +204,7 @@ backend/app/chef/
 | `GET` | `/chefs/{slug}/recipes` | Chef's public recipes |
 | `GET` | `/chefs/{slug}/reviews` | Chef's reviews |
 | `GET` | `/chefs/{slug}/roles` | Chef's assigned roles |
+| `GET` | `/chefs/{slug}/reels` | Chef's public reels (paginated) |
 
 ### Authenticated — user required
 
@@ -191,9 +223,17 @@ backend/app/chef/
 | `POST` | `/chefs/me/banner` | Upload banner image (max 5 MB, crops to 1200×400) |
 | `GET` | `/chefs/me/analytics` | View/like/recipe stats |
 | `GET` | `/chefs/me/recipes` | Own recipe list with stats |
+| `POST` | `/chefs/me/recipes` | Create or update a chef-authored recipe (draft or published) |
 | `GET` | `/chefs/me/plan-usage` | Recipe & video slot usage vs plan limits |
 | `GET` | `/chefs/me/roles` | Own assigned roles |
 | `POST` | `/chefs/me/roles` | Assign/replace roles (`{ role_ids: [1,2,3] }`) |
+| `GET` | `/chefs/me/categories` | Own assigned cuisine categories |
+| `POST` | `/chefs/me/categories` | Assign/replace cuisine categories (`{ category_ids: [...] }`) |
+| `GET` | `/chefs/me/reels` | Own reels list (paginated) |
+| `POST` | `/chefs/me/reels` | Create reel from URL/embed link |
+| `POST` | `/chefs/me/reels/upload` | Upload video file as reel (MP4/MOV/WebM, max 100 MB, multipart form) |
+| `PUT` | `/chefs/me/reels/{reel_id}` | Update reel title/description/hashtags/status |
+| `DELETE` | `/chefs/me/reels/{reel_id}` | Delete reel |
 
 ### Recipe Categories (admin/chef)
 
@@ -201,6 +241,13 @@ backend/app/chef/
 |--------|------|---------|
 | `GET` | `/chefs/recipes/{recipe_id}/categories` | Categories for a recipe |
 | `POST` | `/chefs/recipes/{recipe_id}/categories` | Set categories for a recipe |
+
+### Global Feed Endpoints (public)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/chefs/reels/recent` | Recent active reels from all chefs (with chef info, for find-chef page) |
+| `GET` | `/chefs/recipes/recent` | Recent published chef recipes (with chef info, for find-chef page) |
 
 ### Admin (require admin token)
 
@@ -223,12 +270,13 @@ backend/app/chef/
 
 ```
 CORRECT ORDER in router.py:
-1. /roles, /categories (static prefixes)
-2. /me/profile, /me/avatar, /me/banner, /me/analytics, /me/recipes, /me/plan-usage, /me/roles
+1. /roles, /categories, /categories/tree (static prefixes)
+2. /me/* routes: profile, avatar, banner, analytics, recipes, plan-usage, roles, categories, reels, reels/upload
 3. /recipes/{recipe_id}/categories (static prefix)
-4. GET "" (list)
-5. /{slug}/recipes, /{slug}/reviews, /{slug}/follow, /{slug}/reviews, /{slug}/roles
-6. GET /{slug}  ← MUST BE LAST
+4. /reels/recent, /recipes/recent  ← global feed endpoints (static, before /{slug})
+5. GET "" (list)
+6. /{slug}/recipes, /{slug}/reviews, /{slug}/follow, /{slug}/roles, /{slug}/reels
+7. GET /{slug}  ← MUST BE LAST
 ```
 
 ---
@@ -264,18 +312,21 @@ All under `frontend/src/app/chef-dashboard/`:
 | `layout.tsx` | Sidebar shell — nav, logout, theme toggle | `GET /chefs/me/profile` (for name/plan) |
 | `page.tsx` | Dashboard home — stats, recent recipes, plan usage | `GET /chefs/me/profile`, `/me/recipes`, `/me/plan-usage` |
 | `profile/page.tsx` | Full profile editor | `GET /chefs/me/profile`, `PUT /chefs/me/profile`, `POST /me/avatar`, `POST /me/banner`, `GET /chefs/me/roles`, `POST /chefs/me/roles`, `GET /chefs/roles`, `GET /chefs/categories` |
-| `recipes/page.tsx` | Recipe list + create/edit form | `GET /chefs/me/recipes` |
+| `recipes/page.tsx` | Recipe list + create/edit form | `GET /chefs/me/recipes`, `POST /chefs/me/recipes` |
 | `analytics/page.tsx` | Analytics view (Pro only) | `GET /chefs/me/analytics` |
+| `reels/page.tsx` | Reels management list | `GET /chefs/me/reels`, `DELETE /chefs/me/reels/{id}` |
+| `reels/create/page.tsx` | Add new reel (URL or file upload) | `POST /chefs/me/reels`, `POST /chefs/me/reels/upload` |
 
 ### Dashboard Sidebar Nav Items
 
 ```
-🏠 Dashboard    → /chef-dashboard
-🍳 My Recipes   → /chef-dashboard/recipes
-🤖 AI Recipe    → / (home page)
-📊 Analytics    → /chef-dashboard/analytics  (PRO lock)
-✏️ Edit Profile → /chef-dashboard/profile
-👁 Public Page  → /chef/{slug} (opens new tab, shown when slug exists)
+🏠 Dashboard      → /chef-dashboard
+🍳 My Recipes     → /chef-dashboard/recipes
+🤖 AI Recipe      → / (home page)
+🎬 Manage Reels   → /chef-dashboard/reels
+📊 Analytics      → /chef-dashboard/analytics  (PRO lock)
+✏️ Edit Profile   → /chef-dashboard/profile
+👁 Public Page    → /chef/{slug} (opens new tab, shown when slug exists)
 ```
 
 Bottom of sidebar: `✦ Upgrade to Pro` CTA (free plan only), `🚪 Log Out` button, `🌙 Toggle theme`.
@@ -331,9 +382,9 @@ Bottom of sidebar: `✦ Upgrade to Pro` CTA (free plan only), `🚪 Log Out` but
 
 | Item | Status | Notes |
 |------|--------|-------|
-| `find-chef` page (`/find-chef`) | ⚠️ Mock data | Needs wiring to `GET /chefs` |
-| `/chef/[slug]` public page | ⚠️ Mock data | Needs wiring to `GET /chefs/{slug}` |
-| YouTube Videos management page | ❌ Not built | Planned as `/chef-dashboard/videos` with "Video" nav item |
+| `find-chef` page (`/find-chef`) | ⚠️ Mock data | Needs wiring to `GET /chefs`, `GET /chefs/reels/recent`, `GET /chefs/recipes/recent` |
+| `/chef/[slug]` public page | ⚠️ Mock data | Needs wiring to `GET /chefs/{slug}`, `GET /chefs/{slug}/reels`, `GET /chefs/{slug}/recipes` |
+| Chef Reels (backend + dashboard) | ✅ Done | Full CRUD at `/chef-dashboard/reels`; 7 API endpoints implemented |
 | Chef profile subdomain | ❌ Not built | Future: `slug.chefsy.ai` via wildcard SSL |
 | Admin chef panel wiring | ⚠️ Partial | Frontend exists in `/adminpanel/chefs`, needs `/admin/chefs` backend verification |
 | Registration `chef_slug` field | ✅ Done | `auth.py` auto-creates chef_profile on Chef registration |

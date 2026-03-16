@@ -127,7 +127,8 @@ class ChefAnalyticsOut(BaseModel):
     total_recipe_views: int
     total_likes: int
     total_recipes: int
-    total_videos: int
+    total_videos: int = 0
+    total_reels: int = 0
     follower_count: int
     review_count: int
     rating: Optional[float]

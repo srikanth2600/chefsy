@@ -30,6 +30,9 @@ function ChefShell({ children }: { children: React.ReactNode }) {
     : pathname?.includes('/profile') ? 'profile'
     : pathname?.includes('/recipes') ? 'recipes'
     : pathname?.includes('/reels') ? 'reels'
+    : pathname?.includes('/reviews') ? 'reviews'
+    : pathname?.includes('/messages') ? 'messages'
+    : pathname?.includes('/upgrade') ? 'upgrade'
     : '';
 
   const navItems = [
@@ -37,6 +40,8 @@ function ChefShell({ children }: { children: React.ReactNode }) {
     { icon: '🍳', label: 'My Recipes', href: '/chef-dashboard/recipes', id: 'recipes' },
     { icon: '🤖', label: 'AI Recipe', href: '/', id: 'ai-recipe' },
     { icon: '🎬', label: 'Manage Reels', href: '/chef-dashboard/reels', id: 'reels' },
+    { icon: '⭐', label: 'Reviews', href: '/chef-dashboard/reviews', id: 'reviews' },
+    { icon: '💬', label: 'Messages', href: '/chef-dashboard/messages', id: 'messages' },
     { icon: '📊', label: 'Analytics', href: '/chef-dashboard/analytics', id: 'analytics', lock: !isPro },
     { icon: '✏️', label: 'Edit Profile', href: '/chef-dashboard/profile', id: 'profile' },
   ];
@@ -101,7 +106,7 @@ function ChefShell({ children }: { children: React.ReactNode }) {
         {/* Upgrade CTA */}
         {!isPro && (
           <div style={{ padding: '12px 13px', borderTop: `1px solid ${t.border}` }}>
-            <Btn t={t} style={{ width: '100%', padding: '9px', fontSize: 11 }}>✦ Upgrade to Pro</Btn>
+            <Btn t={t} onClick={() => router.push('/chef-dashboard/upgrade')} style={{ width: '100%', padding: '9px', fontSize: 11 }}>✦ Upgrade to Pro</Btn>
           </div>
         )}
 

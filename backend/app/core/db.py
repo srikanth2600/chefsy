@@ -217,6 +217,13 @@ def run_startup_migrations() -> None:
                 except Exception:
                     logger.exception("Failed to add recipe_master is_active/is_published columns (continuing)")
 
+                # View count for recipes
+                try:
+                    cur.execute("ALTER TABLE recipe_master ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0;")
+                    logger.info("Ensured recipe_master.view_count column exists")
+                except Exception:
+                    logger.exception("Failed to add recipe_master.view_count column (continuing)")
+
                 # Chef roles tables
                 try:
                     cur.execute("""
@@ -300,6 +307,44 @@ def run_startup_migrations() -> None:
                     logger.info("Ensured chef_profile address/geo/gender columns exist")
                 except Exception:
                     logger.exception("Failed to add address columns to chef_profile (continuing)")
+
+            try:
+                with conn.cursor() as cur2:
+                    cur2.execute("""
+                        CREATE TABLE IF NOT EXISTS recipe_reviews (
+                            id          SERIAL PRIMARY KEY,
+                            user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                            recipe_id   INTEGER NOT NULL REFERENCES recipe_master(id) ON DELETE CASCADE,
+                            rating      INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                            review_text TEXT,
+                            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                            UNIQUE (user_id, recipe_id)
+                        )
+                    """)
+                logger.info("Ensured recipe_reviews table exists")
+            except Exception:
+                logger.exception("Failed to create recipe_reviews table (continuing)")
+
+            try:
+                with conn.cursor() as cur3:
+                    cur3.execute("""
+                        CREATE TABLE IF NOT EXISTS chef_messages (
+                            id           SERIAL PRIMARY KEY,
+                            chef_id      INTEGER NOT NULL REFERENCES chef_profile(id) ON DELETE CASCADE,
+                            user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                            sender_name  TEXT,
+                            sender_email TEXT,
+                            subject      TEXT,
+                            message      TEXT NOT NULL,
+                            is_read      BOOLEAN NOT NULL DEFAULT FALSE,
+                            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                        )
+                    """)
+                    cur3.execute("CREATE INDEX IF NOT EXISTS idx_chef_messages_chef_id ON chef_messages(chef_id)")
+                logger.info("Ensured chef_messages table exists")
+            except Exception:
+                logger.exception("Failed to create chef_messages table (continuing)")
 
             conn.commit()
     except OperationalError:

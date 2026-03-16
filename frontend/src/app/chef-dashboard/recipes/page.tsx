@@ -725,7 +725,7 @@ type ListRecipe = {
   cook_time: string; servings: number; description: string; tips: string;
   ytUrl: string; ingredients: RecipeIngredient[]; steps: string[];
   image_url: string | null; calories: string; protein: string; carbs: string; fat: string;
-  views: number; likes: number; published: boolean; created: string;
+  views: number; likes: number; dislikes: number; review_count: number; avg_rating: number | null; published: boolean; created: string;
 };
 
 function RecipesList({ list, onNew, onEdit, loading }: { list: ListRecipe[]; onNew: () => void; onEdit: (r: ListRecipe) => void; loading?: boolean }) {
@@ -781,11 +781,12 @@ function RecipesList({ list, onNew, onEdit, loading }: { list: ListRecipe[]; onN
             <div style={{ width: 44, height: 44, borderRadius: 10, background: t.bgSurface, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, opacity: 0.4, flexShrink: 0 }}>🍳</div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 13, fontWeight: 600, color: t.textPrimary, margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</p>
-              <div style={{ display: 'flex', gap: 8, fontSize: 10, color: t.textTertiary, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: 8, fontSize: 10, color: t.textTertiary, flexWrap: 'wrap', alignItems: 'center' }}>
                 <span>{r.cuisine}</span>
                 <Pill t={t} accent small>{r.difficulty}</Pill>
-                <span>👁 {fmtN(r.views)}</span>
-                <span>♥ {r.likes}</span>
+                <span style={{ color: '#22C55E' }}>👍 {r.likes}</span>
+                {r.dislikes > 0 && <span style={{ color: '#EF4444' }}>👎 {r.dislikes}</span>}
+                {r.review_count > 0 && <span style={{ color: '#F59E0B' }}>★ {r.avg_rating?.toFixed(1) ?? '—'} ({r.review_count})</span>}
                 <span>{r.created}</span>
               </div>
             </div>
@@ -826,6 +827,9 @@ function apiToListRecipe(r: any): ListRecipe {
     fat: r.fat || '',
     views: 0,
     likes: r.like_count || 0,
+    dislikes: r.dislike_count || 0,
+    review_count: r.review_count || 0,
+    avg_rating: r.avg_rating ?? null,
     published: r.is_published ?? true,
     created: r.created_at ? new Date(r.created_at).toLocaleDateString() : 'Unknown',
   };

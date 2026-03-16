@@ -237,6 +237,18 @@ CREATE TABLE IF NOT EXISTS recipe_reaction_count (
   dislikes INTEGER DEFAULT 0
 );
 
+-- Recipe reviews & ratings (one per user per recipe, upsertable)
+CREATE TABLE IF NOT EXISTS recipe_reviews (
+  id          SERIAL PRIMARY KEY,
+  user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  recipe_id   INTEGER NOT NULL REFERENCES recipe_master(id) ON DELETE CASCADE,
+  rating      INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+  review_text TEXT,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, recipe_id)
+);
+
 -- ─── Chef Module ──────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS chef_profile (

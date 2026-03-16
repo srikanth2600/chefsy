@@ -4,7 +4,7 @@
 > the full project context, technical state, architecture, and development rules — before
 > making any changes or implementing new features.
 >
-> **Last Updated:** March 2026 — Chef module fully implemented (backend + dashboard frontend). Registration bug fixed.
+> **Last Updated:** March 2026 (revised) — Chef Reels feature fully implemented (backend + dashboard). Registration bug fixed.
 > **Environment:** All development and testing is done on **localhost** (local machine).
 > Deploy only after local testing is confirmed working.
 
@@ -160,8 +160,21 @@ backend/
 | `POST /chefs/me/banner`         | Chef: upload banner (crop to 1200×400)       |
 | `GET /chefs/me/plan-usage`      | Chef: recipe/video slot usage vs plan        |
 | `GET /chefs/me/analytics`       | Chef: analytics (Pro feature)                |
+| `GET /chefs/me/recipes`         | Chef: own recipe list with stats             |
+| `POST /chefs/me/recipes`        | Chef: create or update a chef-authored recipe|
+| `GET /chefs/me/categories`      | Chef: own cuisine category assignments       |
+| `POST /chefs/me/categories`     | Chef: assign/replace cuisine categories      |
+| `GET /chefs/me/reels`           | Chef: own reels list (paginated)             |
+| `POST /chefs/me/reels`          | Chef: create reel from URL/embed link        |
+| `POST /chefs/me/reels/upload`   | Chef: upload video file as reel (max 100 MB) |
+| `PUT /chefs/me/reels/{id}`      | Chef: update reel                            |
+| `DELETE /chefs/me/reels/{id}`   | Chef: delete reel                            |
+| `GET /chefs/{slug}/reels`       | Public: chef's reels                         |
+| `GET /chefs/reels/recent`       | Public: recent reels from all chefs          |
+| `GET /chefs/recipes/recent`     | Public: recent chef recipes                  |
 | `GET /chefs/roles`              | Public: list chef roles catalogue            |
 | `GET /chefs/categories`         | Public: list recipe categories               |
+| `GET /chefs/categories/tree`    | Public: hierarchical category tree           |
 
 ---
 
@@ -196,6 +209,8 @@ frontend/src/
 │   │   ├── page.tsx              → Dashboard home (stats, recent recipes, plan usage)
 │   │   ├── profile/page.tsx      → Full profile editor (6 sections, crop upload, roles, categories)
 │   │   ├── recipes/page.tsx      → Recipe list + create/edit form
+│   │   ├── reels/page.tsx        → Reels management list (wired to real API)
+│   │   ├── reels/create/page.tsx → Add reel form (URL embed or file upload)
 │   │   └── analytics/page.tsx    → Analytics (Pro plan only)
 │   ├── find-chef/
 │   │   └── page.tsx              → Chef discovery page ⚠️ USES MOCK DATA (not DB-connected yet)
@@ -302,19 +317,31 @@ chef_review         → id, chef_id → chef_profile, user_id → users, rating 
                       comment, created_at
                       UNIQUE(chef_id, user_id)
 
-chef_role           → id, name (UNIQUE), description, created_at
+chef_roles          → id, name (UNIQUE), description, created_at, updated_at
 
-chef_profile_role   → chef_id → chef_profile, role_id → chef_role
-                      PRIMARY KEY (chef_id, role_id)
+chef_role_mapping   → id, chef_id → chef_profile, role_id → chef_roles
+                      UNIQUE(chef_id, role_id)
 
-recipe_category     → id, name, slug (UNIQUE), parent_id → recipe_category (nullable),
-                      level, created_at
+categories          → id, name, slug (UNIQUE), parent_id → categories (nullable),
+                      level, created_at, updated_at
+                      (used for both chef cuisine specialities and recipe tags)
 
-recipe_category_map → recipe_id → recipe_master, category_id → recipe_category
-                      PRIMARY KEY (recipe_id, category_id)
+chef_category_mapping → id, chef_id → chef_profile, category_id → categories
+                        UNIQUE(chef_id, category_id)
+
+recipe_category_map → id, recipe_id → recipe_master, category_id → categories
+                      UNIQUE(recipe_id, category_id)
+
+chef_reels          → id, chef_id → chef_profile, title, description,
+                      hashtags (JSONB '[]'), video_url, video_file_path,
+                      platform ('youtube'|'facebook'|'instagram'|'vimeo'|'direct'|'upload'|'other'),
+                      thumbnail, status DEFAULT 'active', view_count DEFAULT 0,
+                      created_at, updated_at
 
 -- FK added to existing table:
 recipe_master       → chef_id INTEGER REFERENCES chef_profile(id) ON DELETE SET NULL
+recipe_master       → is_published BOOLEAN (default TRUE for AI-generated, FALSE for chef drafts)
+recipe_master       → is_active BOOLEAN (soft-delete flag)
 ```
 
 ---
@@ -443,10 +470,10 @@ POST /auth/dev-setup?email=test@local
 | Recipe search (semantic) | ✅ Working | Vector similarity |
 | Video module | ✅ Working | YouTube + manual upload |
 | Chef backend module | ✅ Working | Full API: profiles, follows, reviews, analytics, plan, roles, categories |
-| Chef dashboard (frontend) | ✅ Working | All 4 pages wired to real API; crop upload; roles/categories UI |
-| Chef public profile `/chef/[slug]` | ⚠️ Mock data | Needs wiring to `GET /chefs/{slug}` |
-| Find Chef `/find-chef` | ⚠️ Mock data | Needs wiring to `GET /chefs` |
-| Chef video management page | ❌ Not built | Planned: `/chef-dashboard/videos` |
+| Chef dashboard (frontend) | ✅ Working | All 5 pages wired to real API; crop upload; roles/categories UI; reels management |
+| Chef public profile `/chef/[slug]` | ⚠️ Mock data | Needs wiring to `GET /chefs/{slug}`, `/{slug}/reels`, `/{slug}/recipes` |
+| Find Chef `/find-chef` | ⚠️ Mock data | Needs wiring to `GET /chefs`, `/chefs/reels/recent`, `/chefs/recipes/recent` |
+| Chef Reels (backend + dashboard) | ✅ Working | Full CRUD: `/chef-dashboard/reels`; platform detection; file upload + URL embed |
 | Chef subdomain (`slug.chefsy.ai`) | ❌ Not built | Requires wildcard SSL + DNS config |
 | Recipe reactions (like/dislike) | ✅ Schema ready | API in routes.py |
 | Step-level reactions | ✅ Schema ready | API in routes.py |
@@ -533,9 +560,9 @@ REDIS_URL=redis://localhost:6379/0
 
 ## 15. Chef Module — Next Steps
 
-1. **Wire `/find-chef` to real API** — replace `MOCK_CHEFS` with `GET /chefs?page=1&per_page=20`
-2. **Wire `/chef/[slug]` to real API** — replace mock with `GET /chefs/{slug}`
-3. **Build `/chef-dashboard/videos` page** — YouTube video management with left nav "Video" item
+1. **Wire `/find-chef` to real API** — replace `MOCK_CHEFS` with `GET /chefs`, `GET /chefs/reels/recent`, `GET /chefs/recipes/recent`
+2. **Wire `/chef/[slug]` to real API** — replace mock with `GET /chefs/{slug}`, `GET /chefs/{slug}/reels`, `GET /chefs/{slug}/recipes`
+3. ✅ ~~**Build `/chef-dashboard/videos` page**~~ — Done as Reels: `/chef-dashboard/reels` (URL embed + file upload)
 4. **Chef subdomain** — wildcard SSL + DNS for `slug.chefsy.ai`
 5. **Admin chef endpoints** — verify `/admin/chefs/*` in `admin.py` is fully wired and test in admin panel
 

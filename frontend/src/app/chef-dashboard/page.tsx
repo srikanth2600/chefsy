@@ -16,23 +16,56 @@ const EMPTY_CHEF: Chef = {
   verified: false, featured: false, avatar_color: '#DA7756', plan: 'free', videos: [],
 };
 
+const API_BASE_CONST = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8005';
+
+function _getYtId(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes('youtu.be')) return u.pathname.slice(1).split('?')[0];
+    if (u.pathname.includes('/shorts/')) return u.pathname.split('/shorts/')[1]?.split('?')[0] || '';
+    return u.searchParams.get('v') || '';
+  } catch { return ''; }
+}
+
 // ─── Video Modal ──────────────────────────────────────────────────────────────
-function VideoModal({ video, chefColor, onClose }: { video: ChefVideo; chefColor: string; onClose: () => void }) {
+function VideoModal({ video, chefColor, onClose }: { video: any; chefColor: string; onClose: () => void }) {
+  const isYt = video.platform === 'youtube' || (video.video_url || '').includes('youtube') || (video.video_url || '').includes('youtu.be');
+  const ytId = isYt && video.video_url ? _getYtId(video.video_url) : '';
+  const fileUrl = video.video_file_path ? `${API_BASE_CONST}${video.video_file_path}` : null;
+
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 999, background: 'rgba(0,0,0,0.9)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div style={{ width: '100%', maxWidth: 420 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
+      <div style={{ width: '100%', maxWidth: 520 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14, alignItems: 'center' }}>
           <p style={{ fontSize: 13, fontWeight: 700, color: '#F5EFE6', margin: 0 }}>{video.title}</p>
           <button onClick={onClose} style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'transparent', color: '#F5EFE6', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>✕</button>
         </div>
-        <div style={{ aspectRatio: '16/9', background: `linear-gradient(135deg,${chefColor}33,#000)`, borderRadius: 14, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '1px solid rgba(255,255,255,0.1)', position: 'relative', overflow: 'hidden' }}>
-          <div style={{ fontSize: 60, opacity: 0.07, position: 'absolute' }}>🎬</div>
-          <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'rgba(218,119,86,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #DA7756', cursor: 'pointer', zIndex: 1, marginBottom: 10 }}>
-            <span style={{ fontSize: 22, marginLeft: 4 }}>▶</span>
-          </div>
-          <p style={{ fontSize: 12, color: '#BCA98D', margin: 0, zIndex: 1 }}>{video.view_count} views · {video.duration}</p>
+        <div style={{ aspectRatio: '16/9', borderRadius: 14, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.1)', background: '#000', position: 'relative' }}>
+          {ytId ? (
+            <iframe
+              src={`https://www.youtube.com/embed/${ytId}?autoplay=1`}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 'none' }}
+              allow="autoplay; fullscreen"
+              allowFullScreen
+            />
+          ) : fileUrl ? (
+            <video src={fileUrl} controls autoPlay style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+          ) : (
+            <>
+              <div style={{ fontSize: 60, opacity: 0.07, position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}>🎬</div>
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, background: `linear-gradient(135deg,${chefColor}33,#000)` }}>
+                <div style={{ width: 60, height: 60, borderRadius: '50%', background: 'rgba(218,119,86,0.28)', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px solid #DA7756' }}>
+                  <span style={{ fontSize: 22, marginLeft: 4 }}>▶</span>
+                </div>
+                <p style={{ fontSize: 12, color: '#BCA98D', margin: 0 }}>No video source available</p>
+              </div>
+            </>
+          )}
         </div>
+        {(video.view_count ?? 0) > 0 && (
+          <p style={{ fontSize: 11, color: '#7D6A52', margin: '8px 0 0', textAlign: 'center' }}>👁 {video.view_count} views</p>
+        )}
       </div>
     </div>
   );
@@ -45,7 +78,9 @@ export default function Dashboard() {
   const [chef, setChef] = useState<Chef>(EMPTY_CHEF);
   const [recentRecipes, setRecentRecipes] = useState<any[]>([]);
   const [planUsage, setPlanUsage] = useState<{ recipes_used: number; recipes_limit: number; videos_used: number; videos_limit: number } | null>(null);
-  const [activeVideo, setActiveVideo] = useState<ChefVideo | null>(null);
+  const [activeVideo, setActiveVideo] = useState<any | null>(null);
+  const [reels, setReels] = useState<any[]>([]);
+  const [analytics, setAnalytics] = useState<any | null>(null);
 
   useEffect(() => {
     const tok = _tok();
@@ -63,6 +98,12 @@ export default function Dashboard() {
     fetch(`${API}/chefs/me/plan-usage`, { headers: h })
       .then(r => r.ok ? r.json() : null)
       .then(d => { if (d) setPlanUsage(d); }).catch(() => {});
+    fetch(`${API}/chefs/me/reels?per_page=10`, { headers: h })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.reels) setReels(d.reels); }).catch(() => {});
+    fetch(`${API}/chefs/me/analytics`, { headers: h })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setAnalytics(d); }).catch(() => {});
   }, []);
 
   const isPro = chef.plan === 'pro';
@@ -70,11 +111,11 @@ export default function Dashboard() {
   const used = { recipes: planUsage?.recipes_used ?? chef.recipe_count, videos: planUsage?.videos_used ?? 0 };
 
   const stats = [
-    { icon: '👁', value: '2.8k', label: 'Views', color: t.accent },
+    { icon: '👁', value: analytics ? fmtN(analytics.profile_views ?? 0) : '—', label: 'Views', color: t.accent },
     { icon: '🍳', value: String(chef.recipe_count), label: 'Recipes', color: t.success },
-    { icon: '♥', value: '803', label: 'Likes', color: '#F59E0B' },
+    { icon: '♥', value: analytics ? fmtN(analytics.total_likes ?? 0) : '—', label: 'Likes', color: '#F59E0B' },
     { icon: '👥', value: fmtN(chef.follower_count), label: 'Followers', color: '#60A5FA' },
-    { icon: '💬', value: '3', label: 'Messages', color: '#A78BFA' },
+    { icon: '🎬', value: String(reels.length || 0), label: 'Reels', color: '#A78BFA' },
   ];
 
   return (
@@ -100,26 +141,53 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Videos */}
+      {/* Videos / Reels */}
       <Card t={t} style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <p style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary, margin: 0 }}>🎬 My Videos</p>
-          <button onClick={() => router.push('/chef-dashboard/profile')} style={{ fontSize: 11, color: t.accent, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>+ Add YouTube Video</button>
+          <p style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary, margin: 0 }}>🎬 My Reels</p>
+          <button onClick={() => router.push('/chef-dashboard/reels')} style={{ fontSize: 11, color: t.accent, background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>Manage Reels →</button>
         </div>
         <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-          {(chef.videos || []).map((v) => (
-            <div key={v.id} style={{ flexShrink: 0, width: 96 }}>
-              <VideoReelCard title={v.title} views={v.view_count} duration={v.duration} chefColor={chef.avatar_color} onPlay={() => setActiveVideo(v)} t={t} />
-            </div>
-          ))}
+          {reels.map((reel: any) => {
+            const isYt = reel.platform === 'youtube' || (reel.video_url || '').includes('youtube') || (reel.video_url || '').includes('youtu.be');
+            let ytId = '';
+            if (isYt && reel.video_url) {
+              try {
+                const u = new URL(reel.video_url);
+                if (u.hostname.includes('youtu.be')) ytId = u.pathname.slice(1).split('?')[0];
+                else if (u.pathname.includes('/shorts/')) ytId = u.pathname.split('/shorts/')[1]?.split('?')[0] || '';
+                else ytId = u.searchParams.get('v') || '';
+              } catch {}
+            }
+            const thumb = reel.thumbnail
+              ? (reel.thumbnail.startsWith('/') ? `${API}${reel.thumbnail}` : reel.thumbnail)
+              : ytId ? `https://img.youtube.com/vi/${ytId}/mqdefault.jpg` : null;
+            return (
+              <div key={reel.id} onClick={() => setActiveVideo(reel)}
+                style={{ flexShrink: 0, width: 96, aspectRatio: '9/16', position: 'relative', borderRadius: 10, overflow: 'hidden', cursor: 'pointer', background: `linear-gradient(160deg,${chef.avatar_color}44,#111)`, border: `1px solid ${t.border}` }}>
+                {thumb
+                  ? <img src={thumb} alt={reel.title} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, opacity: 0.2 }}>🎬</div>
+                }
+                <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(transparent 40%,rgba(0,0,0,0.75))' }} />
+                <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 30, height: 30, borderRadius: '50%', background: 'rgba(255,255,255,0.2)', border: '1.5px solid rgba(255,255,255,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 10, color: '#fff', marginLeft: 2 }}>▶</span>
+                </div>
+                <div style={{ position: 'absolute', bottom: 4, left: 4, right: 4 }}>
+                  <p style={{ fontSize: 8, color: '#fff', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 700 }}>{reel.title}</p>
+                  {(reel.view_count ?? 0) > 0 && <span style={{ fontSize: 7, color: 'rgba(255,255,255,0.65)' }}>👁 {reel.view_count}</span>}
+                </div>
+              </div>
+            );
+          })}
           <div
-            onClick={() => router.push('/chef-dashboard/profile')}
+            onClick={() => router.push('/chef-dashboard/reels/create')}
             style={{ flexShrink: 0, width: 96, aspectRatio: '9/16', background: t.bgSurface, border: `2px dashed ${t.border}`, borderRadius: 10, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', gap: 4, transition: 'border-color 0.15s' }}
             onMouseEnter={(e) => (e.currentTarget.style.borderColor = t.borderAcc)}
             onMouseLeave={(e) => (e.currentTarget.style.borderColor = t.border)}
           >
-            <span style={{ fontSize: 18, opacity: 0.4 }}>▶</span>
-            <span style={{ fontSize: 8, color: t.textTertiary, textAlign: 'center', padding: '0 6px', lineHeight: 1.3 }}>Link YouTube</span>
+            <span style={{ fontSize: 18, opacity: 0.4 }}>＋</span>
+            <span style={{ fontSize: 8, color: t.textTertiary, textAlign: 'center', padding: '0 6px', lineHeight: 1.3 }}>Add Reel</span>
           </div>
         </div>
       </Card>
@@ -170,7 +238,9 @@ export default function Dashboard() {
             <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: 13, fontWeight: 600, color: t.textPrimary, margin: '0 0 3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</p>
               <div style={{ display: 'flex', gap: 10, fontSize: 10, color: t.textTertiary }}>
-                <span>♥ {r.like_count ?? 0}</span>
+                <span style={{ color: '#F59E0B' }}>♥ {r.like_count ?? 0}</span>
+                {(r.dislike_count ?? 0) > 0 && <span>👎 {r.dislike_count}</span>}
+                {(r.comment_count ?? 0) > 0 && <span>💬 {r.comment_count}</span>}
                 <span>{r.created_at ? new Date(r.created_at).toLocaleDateString() : ''}</span>
               </div>
             </div>
