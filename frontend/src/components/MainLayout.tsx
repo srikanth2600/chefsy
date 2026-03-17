@@ -168,13 +168,6 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         {/* Header — matches chat page header height/style */}
         <header style={{ flexShrink: 0, height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 16px', background: 'var(--bg-elevated)', borderBottom: '1px solid var(--border)', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            {/* Mobile hamburger */}
-            <button
-              onClick={() => setMobileSidebarOpen(v => !v)}
-              style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: 'none', background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer' }}
-            >
-              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
-            </button>
             <button
               type="button"
               onClick={() => router.push('/')}

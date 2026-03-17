@@ -28,6 +28,22 @@ interface GenerateForm {
   name: string; dietary_preferences: string[]; allergies: string[];
   servings: number; cuisine_preference: string;
 }
+interface BodyData {
+  weight: string; weightUnit: 'kg' | 'lbs';
+  height: string; heightUnit: 'cm' | 'ft';
+  dob: string; gender: string; activityLevel: string; goal: string;
+}
+
+const defaultBodyData: BodyData = {
+  weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm',
+  dob: '', gender: '', activityLevel: '', goal: '',
+};
+
+function loadBodyData(): BodyData {
+  try { const d = localStorage.getItem('meal_body_data'); return d ? { ...defaultBodyData, ...JSON.parse(d) } : defaultBodyData; }
+  catch { return defaultBodyData; }
+}
+function saveBodyData(d: BodyData) { try { localStorage.setItem('meal_body_data', JSON.stringify(d)); } catch {} }
 
 function toggle(arr: string[], val: string) {
   return arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val];
@@ -40,6 +56,15 @@ function getNotifyPref(id: number) {
   try { const v = localStorage.getItem(`meal_notify_${id}`); return v === null ? true : v === 'true'; } catch { return true; }
 }
 function setNotifyPref(id: number, v: boolean) { try { localStorage.setItem(`meal_notify_${id}`, String(v)); } catch {} }
+
+function buildPrefsChip(form: GenerateForm): string {
+  const parts: string[] = [];
+  if (form.dietary_preferences.length) parts.push(form.dietary_preferences.join(', '));
+  if (form.allergies.length) parts.push(`No: ${form.allergies.join(', ')}`);
+  if (form.cuisine_preference) parts.push(`${form.cuisine_preference} cuisine`);
+  parts.push(`${form.servings} serving${form.servings !== 1 ? 's' : ''}`);
+  return parts.join(' · ');
+}
 
 // ---------------------------------------------------------------------------
 // Notification toggle
@@ -102,6 +127,110 @@ function PlanCard({ plan, onView, onDelete }: { plan: Plan; onView: () => void; 
 }
 
 // ---------------------------------------------------------------------------
+// Body & Lifestyle Modal
+// ---------------------------------------------------------------------------
+function BodyModal({ data, onSave, onClose }: { data: BodyData; onSave: (d: BodyData) => void; onClose: () => void }) {
+  const [form, setForm] = useState<BodyData>(data);
+  const set = (k: keyof BodyData, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+  const inputStyle: React.CSSProperties = {
+    width: '100%', padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))',
+    borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit',
+  };
+  const labelStyle: React.CSSProperties = { fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500, marginBottom: 4, display: 'block' };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: 'var(--bg-surface)', borderRadius: 20, padding: '24px 22px 20px', width: '100%', maxWidth: 460, maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border, rgba(255,255,255,0.1))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
+          <div>
+            <h2 style={{ fontSize: 17, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Body &amp; Lifestyle</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: 12, margin: '3px 0 0' }}>Helps AI tailor calorie &amp; nutrition targets to you.</p>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18, lineHeight: 1 }}>✕</button>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Weight + Height row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Weight</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input type="number" min="1" max="500" value={form.weight} onChange={e => set('weight', e.target.value)} placeholder="e.g. 70" style={{ ...inputStyle, flex: 1 }} />
+                <select value={form.weightUnit} onChange={e => set('weightUnit', e.target.value as 'kg' | 'lbs')} style={{ ...inputStyle, width: 56, paddingLeft: 6, paddingRight: 4 }}>
+                  <option value="kg">kg</option>
+                  <option value="lbs">lbs</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Height</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input type="number" min="1" max="300" value={form.height} onChange={e => set('height', e.target.value)} placeholder="e.g. 170" style={{ ...inputStyle, flex: 1 }} />
+                <select value={form.heightUnit} onChange={e => set('heightUnit', e.target.value as 'cm' | 'ft')} style={{ ...inputStyle, width: 56, paddingLeft: 6, paddingRight: 4 }}>
+                  <option value="cm">cm</option>
+                  <option value="ft">ft</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* DOB + Gender row */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <label style={labelStyle}>Date of Birth</label>
+              <input type="date" value={form.dob} onChange={e => set('dob', e.target.value)} style={inputStyle} />
+            </div>
+            <div>
+              <label style={labelStyle}>Gender</label>
+              <select value={form.gender} onChange={e => set('gender', e.target.value)} style={inputStyle}>
+                <option value="">Select…</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Other">Other</option>
+                <option value="Prefer not to say">Prefer not to say</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Activity Level */}
+          <div>
+            <label style={labelStyle}>Activity Level</label>
+            <select value={form.activityLevel} onChange={e => set('activityLevel', e.target.value)} style={inputStyle}>
+              <option value="">Select…</option>
+              <option value="Sedentary">Sedentary (little or no exercise)</option>
+              <option value="Lightly Active">Lightly Active (1–3 days/week)</option>
+              <option value="Moderately Active">Moderately Active (3–5 days/week)</option>
+              <option value="Very Active">Very Active (6–7 days/week)</option>
+              <option value="Extremely Active">Extremely Active (athlete / physical job)</option>
+            </select>
+          </div>
+
+          {/* Goal */}
+          <div>
+            <label style={labelStyle}>Health Goal</label>
+            <select value={form.goal} onChange={e => set('goal', e.target.value)} style={inputStyle}>
+              <option value="">Select…</option>
+              <option value="Lose Weight">Lose Weight</option>
+              <option value="Maintain Weight">Maintain Weight</option>
+              <option value="Gain Muscle">Gain Muscle</option>
+              <option value="Eat Healthier">Eat Healthier</option>
+              <option value="Manage Condition">Manage a Health Condition</option>
+            </select>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+          <button onClick={onClose} style={{ flex: 1, background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, padding: '10px 0', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={() => { saveBodyData(form); onSave(form); onClose(); }} style={{ flex: 2, background: 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Save Profile</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 export default function MealPlansPage() {
@@ -113,15 +242,22 @@ export default function MealPlansPage() {
   const [generating, setGenerating] = useState(false);
   const [error, setError]           = useState('');
   const [showModal, setShowModal]   = useState(false);
+  const [showBodyModal, setShowBodyModal] = useState(false);
   const [upgradeRequired, setUpgradeRequired] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [filterDietary, setFilterDietary] = useState<string[]>([]);
   const [filterCuisine, setFilterCuisine] = useState('');
+  const [bodyData, setBodyData]     = useState<BodyData>(defaultBodyData);
+  // pendingForm: preferences set via modal, ready to be included in next generate
+  const [pendingForm, setPendingForm] = useState<GenerateForm | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const [form, setForm] = useState<GenerateForm>({
     name: '', dietary_preferences: [], allergies: [], servings: 2, cuisine_preference: '',
   });
+
+  // Load body data from localStorage on mount
+  useEffect(() => { setBodyData(loadBodyData()); }, []);
 
   useEffect(() => {
     fetch(`${API}/meal-plans/options`).then(r => r.ok ? r.json() : null).then(d => { if (d) setOptions(d); }).catch(() => {});
@@ -145,10 +281,28 @@ export default function MealPlansPage() {
 
   useEffect(() => { fetchPlans(); fetchUsage(); }, []);
 
-  const openModal = () => {
+  // Open modal to set preferences (always opens modal)
+  const openPrefsModal = () => {
     setUpgradeRequired(false);
-    setForm(f => ({ ...f, name: searchText.trim() }));
+    setForm(f => ({
+      ...f,
+      name: pendingForm?.name || searchText.trim().slice(0, 60),
+      dietary_preferences: pendingForm?.dietary_preferences || [],
+      allergies: pendingForm?.allergies || [],
+      servings: pendingForm?.servings || 2,
+      cuisine_preference: pendingForm?.cuisine_preference || '',
+    }));
     setShowModal(true);
+  };
+
+  // "Plan Meal" button handler
+  const handlePlanMeal = () => {
+    if (pendingForm) {
+      // Preferences already set — generate now
+      handleGenerate(pendingForm);
+    } else {
+      openPrefsModal();
+    }
   };
 
   const handleDelete = async (id: number, e: React.MouseEvent) => {
@@ -158,24 +312,51 @@ export default function MealPlansPage() {
     setPlans(prev => prev.filter(p => p.id !== id));
   };
 
-  const handleGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Core generate logic — accepts a form + uses current searchText + bodyData
+  const handleGenerate = async (genForm: GenerateForm) => {
     setGenerating(true); setError('');
     try {
       const res = await fetch(`${API}/meal-plans/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok()}` },
-        body: JSON.stringify({ name: form.name || undefined, dietary_preferences: form.dietary_preferences, allergies: form.allergies, servings: form.servings, cuisine_preference: form.cuisine_preference || undefined }),
+        body: JSON.stringify({
+          name: genForm.name || undefined,
+          dietary_preferences: genForm.dietary_preferences,
+          allergies: genForm.allergies,
+          servings: genForm.servings,
+          cuisine_preference: genForm.cuisine_preference || undefined,
+          extra_context: searchText.trim() || undefined,
+          body_lifestyle: (bodyData.weight || bodyData.goal || bodyData.activityLevel) ? bodyData : undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok) {
         if (res.status === 403) { setUpgradeRequired(true); setShowModal(false); return; }
         throw new Error(json?.detail?.message ?? json?.detail ?? 'Generation failed');
       }
-      setShowModal(false); setSearchText(''); fetchUsage();
+      setShowModal(false);
+      setSearchText('');
+      setPendingForm(null);
+      fetchUsage();
       router.push(`/meal-plans/${encodePlanId(json.plan.id)}`);
     } catch (err: any) { setError(err.message); }
     finally { setGenerating(false); }
+  };
+
+  // Modal action: "Set Preferences" — populate textarea, do NOT generate yet
+  const handleSetPreferences = () => {
+    setPendingForm({ ...form });
+    const chip = buildPrefsChip(form);
+    // Prepend a short preferences summary to the textarea
+    setSearchText(prev => {
+      const existing = prev.trim().replace(/^🥦.*$/m, '').trim();
+      return existing ? existing + '\n' + chip : chip;
+    });
+    setShowModal(false);
+    setTimeout(() => {
+      const ta = textareaRef.current;
+      if (ta) { ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    }, 80);
   };
 
   const allPlanDietary = Array.from(new Set(plans.flatMap(p => p.preferences_json?.dietary ?? [])));
@@ -187,8 +368,9 @@ export default function MealPlansPage() {
     return true;
   });
 
+  const hasBodyProfile = !!(bodyData.weight || bodyData.goal || bodyData.activityLevel);
+
   return (
-    // Full-height flex column so we can pin the search box at the bottom
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
 
       {/* ── Scrollable middle ── */}
@@ -255,7 +437,7 @@ export default function MealPlansPage() {
         </div>
       </div>
 
-      {/* ── Bottom search bar — pinned like AI chat input ── */}
+      {/* ── Bottom search bar ── */}
       <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-elevated)', padding: '12px 16px 16px' }}>
         <div style={{ maxWidth: 680, margin: '0 auto' }}>
           {/* Usage bar */}
@@ -275,40 +457,83 @@ export default function MealPlansPage() {
             </div>
           )}
 
+          {/* Pending prefs chip */}
+          {pendingForm && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>Preferences:</span>
+              <span style={{ fontSize: 11, background: 'rgba(218,119,86,0.12)', color: 'var(--claude-orange)', borderRadius: 20, padding: '2px 10px', border: '1px solid rgba(218,119,86,0.3)' }}>{buildPrefsChip(pendingForm)}</span>
+              <button onClick={() => { setPendingForm(null); setSearchText(''); }} title="Clear preferences" style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px' }}>✕</button>
+              <button onClick={openPrefsModal} style={{ background: 'none', border: 'none', color: 'var(--claude-orange)', cursor: 'pointer', fontSize: 11, textDecoration: 'underline', padding: 0, fontFamily: 'inherit' }}>Edit</button>
+            </div>
+          )}
+
           {/* Input box */}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 14, padding: '10px 12px 10px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 14, padding: '10px 10px 10px 16px' }}>
             <textarea
               ref={textareaRef}
               value={searchText}
               onChange={e => setSearchText(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); openModal(); } }}
-              placeholder="Describe your ideal week… e.g. high-protein vegetarian plan"
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handlePlanMeal(); } }}
+              placeholder={pendingForm ? 'Add more details… then click Plan Meal to generate' : 'Describe your ideal week… e.g. high-protein vegetarian plan'}
               rows={1}
               style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 14, lineHeight: 1.5, resize: 'none', fontFamily: 'inherit', maxHeight: 80, overflowY: 'auto' }}
             />
+
+            {/* Body & Lifestyle icon button */}
             <button
-              onClick={openModal}
-              style={{ background: 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 10, padding: '8px 18px', fontSize: 13, fontWeight: 700, cursor: 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5 }}
+              onClick={() => setShowBodyModal(true)}
+              title="Body & Lifestyle profile"
+              style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: hasBodyProfile ? 'rgba(218,119,86,0.12)' : 'rgba(255,255,255,0.06)', border: `1px solid ${hasBodyProfile ? 'rgba(218,119,86,0.4)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 10, color: hasBodyProfile ? 'var(--claude-orange)' : 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0, transition: 'background 0.15s,color 0.15s' }}
             >
-              <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg>
-              Plan Meal
+              {/* Body/person silhouette icon */}
+              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+                <circle cx="12" cy="5" r="2.5"/>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 21v-6H6l2-6h8l2 6h-2v6"/>
+                <path strokeLinecap="round" d="M10 21v-3m4 3v-3"/>
+              </svg>
+            </button>
+
+            {/* Plan Meal button */}
+            <button
+              onClick={handlePlanMeal}
+              disabled={generating}
+              style={{ background: generating ? 'rgba(218,119,86,0.5)' : 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 10, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: generating ? 'not-allowed' : 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
+            >
+              {generating
+                ? <><span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} /> Generating…</>
+                : pendingForm
+                  ? <><svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 12l5 5L19 7"/></svg> Generate</>
+                  : <><svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg> Plan Meal</>
+              }
             </button>
           </div>
+
+          {!pendingForm && (
+            <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '6px 0 0', textAlign: 'center' }}>
+              Press <kbd style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Enter</kbd> or click <strong>Plan Meal</strong> to set preferences
+            </p>
+          )}
         </div>
       </div>
 
-      {/* ── Generate modal ── */}
+      {/* ── Generate / Preferences Modal ── */}
       {showModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
           onClick={e => { if (e.target === e.currentTarget) setShowModal(false); }}>
           <div style={{ background: 'var(--bg-surface)', borderRadius: 20, padding: '26px 24px 22px', width: '100%', maxWidth: 520, maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border, rgba(255,255,255,0.1))' }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Generate Meal Plan</h2>
-            <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>AI will create a personalised 7-day plan.</p>
-            <form onSubmit={handleGenerate} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 18, gap: 8 }}>
+              <div>
+                <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>Set Plan Preferences</h2>
+                <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '4px 0 0' }}>Customise your 7-day meal plan.</p>
+              </div>
+              <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 18, lineHeight: 1, flexShrink: 0 }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                 Plan name
                 <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="My Weekly Plan"
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }} />
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
               </label>
 
               {options.dietary.length > 0 && (
@@ -352,16 +577,44 @@ export default function MealPlansPage() {
               </label>
 
               {error && <div style={{ color: 'var(--error, #E06B6B)', fontSize: 12 }}>{error}</div>}
-              <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-                <button type="button" onClick={() => setShowModal(false)} style={{ flex: 1, background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, padding: '10px 0', fontSize: 13, cursor: 'pointer' }}>Cancel</button>
-                <button type="submit" disabled={generating} style={{ flex: 2, background: generating ? 'rgba(218,119,86,0.5)' : 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: generating ? 'not-allowed' : 'pointer' }}>
-                  {generating ? 'Generating…' : '✦ Generate Plan'}
+
+              {/* Two action buttons */}
+              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                <button type="button" onClick={() => setShowModal(false)} style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, padding: '10px 12px', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Cancel</button>
+                <button
+                  type="button"
+                  onClick={handleSetPreferences}
+                  style={{ flex: 1, background: 'rgba(255,255,255,0.07)', color: 'var(--text-primary)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 8, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+                >
+                  Set in Search →
+                </button>
+                <button
+                  type="button"
+                  disabled={generating}
+                  onClick={() => { setShowModal(false); handleGenerate(form); }}
+                  style={{ flex: 1, background: generating ? 'rgba(218,119,86,0.5)' : 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 0', fontSize: 13, fontWeight: 600, cursor: generating ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}
+                >
+                  {generating ? 'Generating…' : '✦ Generate Now'}
                 </button>
               </div>
-            </form>
+              <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '-8px 0 0', textAlign: 'center' }}>
+                <strong>Set in Search</strong> lets you add more details before generating.
+              </p>
+            </div>
           </div>
         </div>
       )}
+
+      {/* ── Body & Lifestyle Modal ── */}
+      {showBodyModal && (
+        <BodyModal
+          data={bodyData}
+          onSave={d => setBodyData(d)}
+          onClose={() => setShowBodyModal(false)}
+        />
+      )}
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
