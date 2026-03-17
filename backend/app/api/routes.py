@@ -473,6 +473,28 @@ def recent_recipes(http_request: Request, limit: int = 8):
         return {"recipes": []}
 
 
+@router.get("/recipes/{recipe_key}")
+def get_recipe_by_key(recipe_key: str):
+    """Return full recipe JSON for a given recipe_key. Public endpoint."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT recipe_key, title, image_path, recipe_json FROM recipe_master WHERE recipe_key = %s",
+                    (recipe_key,),
+                )
+                row = cur.fetchone()
+        if not row:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Recipe not found")
+        return {"recipe_key": row["recipe_key"], "title": row["title"],
+                "image_path": row.get("image_path"), "recipe": row.get("recipe_json") or {}}
+    except Exception as exc:
+        logger.exception("/recipes/%s failed: %s", recipe_key, exc)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail="Failed to load recipe")
+
+
 @router.get("/chats")
 def list_chats(http_request: Request):
     """List recent chats for the authenticated user. Returns up to 20 chats with chat_id and title (first user message)."""

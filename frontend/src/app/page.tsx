@@ -451,11 +451,13 @@ export default function Home() {
             <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg>
             {drawerOpen && 'New Chat'}
           </button>
-          {/* Restaurant Near You — commented out */}
-          {/* <a href="/restaurants" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:drawerOpen?'flex-start':'center', gap:8, padding:drawerOpen?'8px 12px':'8px', borderRadius:10, textDecoration:'none', color:'var(--text-secondary)', fontSize:13, fontWeight:500, fontFamily:'inherit', transition:'background 0.15s,color 0.15s' }}>
-            <span style={{fontSize:15,flexShrink:0}}>🍽️</span>
-            {drawerOpen && <span>Restaurant Near You</span>}
-          </a> */}
+          {/* AI Recipes */}
+          <a href="/recipes" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:drawerOpen?'flex-start':'center', gap:8, padding:drawerOpen?'8px 12px':'8px', borderRadius:10, textDecoration:'none', color:'var(--text-secondary)', fontSize:13, fontWeight:500, fontFamily:'inherit', transition:'background 0.15s,color 0.15s' }}
+            onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='var(--accent-alpha-10)';(e.currentTarget as HTMLElement).style.color='var(--text-primary)';}}
+            onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent';(e.currentTarget as HTMLElement).style.color='var(--text-secondary)';}}>
+            <span style={{fontSize:15,flexShrink:0}}>🍳</span>
+            {drawerOpen && <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>AI Recipes</span>}
+          </a>
           {/* Find a Chef */}
           <a href="/find-chef" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:drawerOpen?'flex-start':'center', gap:8, padding:drawerOpen?'8px 12px':'8px', borderRadius:10, textDecoration:'none', color:'var(--text-secondary)', fontSize:13, fontWeight:500, fontFamily:'inherit', transition:'background 0.15s,color 0.15s' }}
             onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='var(--accent-alpha-10)';(e.currentTarget as HTMLElement).style.color='var(--text-primary)';}}

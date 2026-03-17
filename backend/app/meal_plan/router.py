@@ -47,6 +47,48 @@ def _require_owner(user_id: int, plan_id: int) -> dict:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/usage")
+def get_usage(request: Request):
+    """Return today's meal plan generation count vs the configured daily limit."""
+    user_id = _require_user(request)
+    from datetime import date as _date
+    from app.core.packages import get_user_plan, get_package_limits
+    plan_name = get_user_plan(user_id)
+    limits = get_package_limits(plan_name)
+    meal_limits = limits.get("meal_plan", {})
+
+    daily_limit: int | None = meal_limits.get("daily")
+    monthly_limit: int | None = meal_limits.get("monthly")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM meal_plan WHERE user_id = %s AND DATE(created_at) = %s",
+                (user_id, _date.today()),
+            )
+            today_used = int(cur.fetchone()["cnt"])
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM meal_plan WHERE user_id = %s AND DATE_TRUNC('month', created_at) = DATE_TRUNC('month', NOW())",
+                (user_id,),
+            )
+            month_used = int(cur.fetchone()["cnt"])
+
+    can_generate = True
+    if daily_limit is not None and today_used >= daily_limit:
+        can_generate = False
+    if monthly_limit is not None and monthly_limit == 0:
+        can_generate = False
+
+    return {
+        "plan": plan_name,
+        "daily_limit": daily_limit,
+        "monthly_limit": monthly_limit,
+        "today_used": today_used,
+        "month_used": month_used,
+        "can_generate": can_generate,
+    }
+
+
 @router.get("/options")
 def get_options():
     """Return active dietary / allergy / cuisine options for the generate modal."""

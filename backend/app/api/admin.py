@@ -1282,3 +1282,179 @@ def admin_delete_meal_plan_option(option_id: int, request: Request):
             conn.commit()
     return {"status": "ok"}
 
+
+# ---------------------------------------------------------------------------
+# Subscription Packages — CRUD + Feature Limits
+# ---------------------------------------------------------------------------
+
+from typing import Optional as _Opt, List as _List
+
+class PackageBody(BaseModel):
+    name: str
+    display_name: str
+    description: str = ""
+    price_monthly: float = 0
+    price_yearly: float = 0
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class FeatureLimitItem(BaseModel):
+    feature: str   # ai_recipe | meal_plan | ai_video
+    period: str    # daily | monthly
+    limit_value: _Opt[int] = None  # None = unlimited
+
+
+class PackageLimitsUpdate(BaseModel):
+    limits: _List[FeatureLimitItem]
+
+
+def _fmt_pkg(row: dict) -> dict:
+    row = dict(row)
+    row["created_at"] = str(row["created_at"])
+    row["updated_at"] = str(row["updated_at"])
+    row["price_monthly"] = float(row["price_monthly"])
+    row["price_yearly"] = float(row["price_yearly"])
+    return row
+
+
+@router.get("/packages")
+def admin_list_packages(request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM subscription_package ORDER BY sort_order, name")
+            pkgs = [_fmt_pkg(r) for r in cur.fetchall()]
+            cur.execute("SELECT * FROM package_feature_limit ORDER BY package_id, feature, period")
+            limits = [dict(r) for r in cur.fetchall()]
+    # Attach limits to packages
+    limits_by_pkg: dict = {}
+    for lim in limits:
+        pid = lim["package_id"]
+        if pid not in limits_by_pkg:
+            limits_by_pkg[pid] = []
+        limits_by_pkg[pid].append({
+            "id": lim["id"],
+            "feature": lim["feature"],
+            "period": lim["period"],
+            "limit_value": lim["limit_value"],
+        })
+    for pkg in pkgs:
+        pkg["limits"] = limits_by_pkg.get(pkg["id"], [])
+    return pkgs
+
+
+@router.post("/packages")
+def admin_create_package(request: Request, body: PackageBody):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    name = body.name.strip().lower().replace(" ", "_")
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO subscription_package
+                   (name,display_name,description,price_monthly,price_yearly,is_active,sort_order)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
+                (name, body.display_name.strip(), body.description.strip(),
+                 body.price_monthly, body.price_yearly, body.is_active, body.sort_order),
+            )
+            row = _fmt_pkg(cur.fetchone())
+            conn.commit()
+    row["limits"] = []
+    return row
+
+
+@router.put("/packages/{package_id}")
+def admin_update_package(package_id: int, request: Request, body: PackageBody):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """UPDATE subscription_package
+                   SET display_name=%s,description=%s,price_monthly=%s,price_yearly=%s,
+                       is_active=%s,sort_order=%s,updated_at=NOW()
+                   WHERE id=%s RETURNING *""",
+                (body.display_name.strip(), body.description.strip(),
+                 body.price_monthly, body.price_yearly, body.is_active,
+                 body.sort_order, package_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Package not found")
+            row = _fmt_pkg(row)
+            conn.commit()
+    return row
+
+
+@router.delete("/packages/{package_id}")
+def admin_delete_package(package_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM subscription_package WHERE id = %s", (package_id,))
+            conn.commit()
+    return {"status": "ok"}
+
+
+@router.put("/packages/{package_id}/limits")
+def admin_update_package_limits(package_id: int, request: Request, body: PackageLimitsUpdate):
+    """Upsert all feature limits for a package (replaces existing set)."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    valid_features = {"ai_recipe", "meal_plan", "ai_video"}
+    valid_periods  = {"daily", "monthly"}
+    for item in body.limits:
+        if item.feature not in valid_features:
+            raise HTTPException(status_code=422, detail=f"Invalid feature: {item.feature}")
+        if item.period not in valid_periods:
+            raise HTTPException(status_code=422, detail=f"Invalid period: {item.period}")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Verify package exists
+            cur.execute("SELECT id FROM subscription_package WHERE id = %s", (package_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Package not found")
+            # Replace all limits: delete existing then insert fresh
+            cur.execute("DELETE FROM package_feature_limit WHERE package_id = %s", (package_id,))
+            for item in body.limits:
+                cur.execute(
+                    """INSERT INTO package_feature_limit (package_id,feature,period,limit_value)
+                       VALUES (%s,%s,%s,%s)""",
+                    (package_id, item.feature, item.period, item.limit_value),
+                )
+            conn.commit()
+            # Return updated limits
+            cur.execute(
+                "SELECT * FROM package_feature_limit WHERE package_id=%s ORDER BY feature,period",
+                (package_id,),
+            )
+            limits = [{"id": r["id"], "feature": r["feature"], "period": r["period"],
+                       "limit_value": r["limit_value"]} for r in cur.fetchall()]
+    return {"status": "ok", "limits": limits}
+
+
+@router.get("/packages/{package_id}/limits")
+def admin_get_package_limits(package_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM package_feature_limit WHERE package_id=%s ORDER BY feature,period",
+                (package_id,),
+            )
+            limits = [{"id": r["id"], "feature": r["feature"], "period": r["period"],
+                       "limit_value": r["limit_value"]} for r in cur.fetchall()]
+    return limits
+

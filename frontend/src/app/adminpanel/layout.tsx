@@ -33,6 +33,7 @@ const NAV = [
   {
     label: 'Configuration',
     items: [
+      { id: 'packages',          href: '/adminpanel/packages',          icon: '📦',  label: 'Packages' },
       { id: 'chef-roles',       href: '/adminpanel/chef-roles',       icon: '🏷',  label: 'Chef Roles' },
       { id: 'categories',       href: '/adminpanel/categories',       icon: '📂',  label: 'Categories' },
       { id: 'meal-plan-options', href: '/adminpanel/meal-plan-options', icon: '🥗',  label: 'Meal Plan Options' },

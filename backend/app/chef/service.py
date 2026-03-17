@@ -5,11 +5,12 @@ from app.chef.schema import (
     ChefPublicOut, ChefListItem, ChefFollowOut,
     ChefAnalyticsOut, ChefPlanUsageOut,
 )
+from app.core.packages import get_package_limits
 
-# Free / Pro plan limits
-PLAN_LIMITS = {
+# Hard-coded fallbacks (used when DB package tables are unavailable)
+_PLAN_LIMITS_FALLBACK = {
     "free": {"recipes": 3, "videos": 1},
-    "pro":  {"recipes": 10, "videos": 5},
+    "pro":  {"recipes": 25, "videos": 10},
 }
 
 
@@ -118,7 +119,21 @@ def get_plan_usage(user_id: int) -> Optional[ChefPlanUsageOut]:
     if not chef:
         return None
     plan = chef.get("plan", "free")
-    limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+
+    # Fetch limits from DB packages; fall back to hard-coded values
+    pkg_limits = get_package_limits(plan)
+    fallback = _PLAN_LIMITS_FALLBACK.get(plan, _PLAN_LIMITS_FALLBACK["free"])
+
+    # monthly recipe limit (None = unlimited represented as -1 for display)
+    recipe_monthly = pkg_limits.get("ai_recipe", {}).get("monthly")
+    recipes_limit = recipe_monthly if recipe_monthly is not None else fallback["recipes"]
+    if recipes_limit is None:
+        recipes_limit = 9999  # unlimited sentinel
+
+    video_monthly = pkg_limits.get("ai_video", {}).get("monthly")
+    videos_limit = video_monthly if video_monthly is not None else fallback["videos"]
+    if videos_limit is None:
+        videos_limit = 9999  # unlimited sentinel
 
     from app.core.db import get_connection
     with get_connection() as conn:
@@ -136,9 +151,9 @@ def get_plan_usage(user_id: int) -> Optional[ChefPlanUsageOut]:
     return ChefPlanUsageOut(
         plan=plan,
         recipes_used=recipes_used,
-        recipes_limit=limits["recipes"],
+        recipes_limit=recipes_limit,
         videos_used=videos_used,
-        videos_limit=limits["videos"],
-        can_add_recipe=recipes_used < limits["recipes"],
-        can_add_video=videos_used < limits["videos"],
+        videos_limit=videos_limit,
+        can_add_recipe=recipes_used < recipes_limit,
+        can_add_video=videos_used < videos_limit,
     )

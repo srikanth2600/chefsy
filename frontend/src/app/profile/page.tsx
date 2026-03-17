@@ -83,6 +83,8 @@ function CropModal({ file, onConfirm, onCancel }: { file: File; onConfirm: (b: B
 
 const GENDERS = ['Male', 'Female', 'Non-binary', 'Prefer not to say'];
 const CHEF_TYPES = ['Chef', 'Restaurant/Foodcourt'];
+const ACTIVITY_LEVELS = ['Sedentary', 'Lightly Active', 'Moderately Active', 'Very Active', 'Extra Active'];
+const HEALTH_GOALS = ['Lose Weight', 'Maintain Weight', 'Gain Muscle', 'Eat Healthier', 'Improve Fitness', 'Manage Condition'];
 
 const inp: React.CSSProperties = { width: '100%', padding: '9px 12px', borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', background: 'var(--bg-base,#131110)', color: 'var(--text-primary,#F5EFE6)', fontSize: 13, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' };
 const inpDis: React.CSSProperties = { ...inp, opacity: 0.4, cursor: 'not-allowed' };
@@ -91,30 +93,52 @@ const card: React.CSSProperties = { background: 'var(--bg-elevated,#252220)', bo
 const cardH: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: 'var(--text-primary,#F5EFE6)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 6 };
 const btn: React.CSSProperties = { padding: '8px 20px', borderRadius: 9, border: 'none', background: '#F97316', color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 700, fontFamily: 'inherit' };
 
+interface BodyInfo {
+  height_cm: string;
+  weight_kg: string;
+  activity_level: string;
+  health_goals: string[];
+  date_of_birth: string;
+}
+
 export default function ProfilePage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [user, setUser] = useState<{
-    id: number; full_name: string; email: string; phone: string | null;
-    user_type: string | null; profile_pic: string | null; gender: string | null; address: string | null;
-  } | null>(null);
+  const [user, setUser] = useState<any | null>(null);
 
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  // Personal info
+  const [name, setName]     = useState('');
+  const [phone, setPhone]   = useState('');
   const [gender, setGender] = useState('');
-  const [address, setAddress] = useState('');
+
+  // Structured address
+  const [addrLine1, setAddrLine1] = useState('');
+  const [addrLine2, setAddrLine2] = useState('');
+  const [city, setCity]           = useState('');
+  const [postcode, setPostcode]   = useState('');
+  const [lat, setLat]             = useState('');
+  const [lng, setLng]             = useState('');
+  const [geocoding, setGeocoding] = useState(false);
+
+  // Body & Lifestyle
+  const [body, setBody] = useState<BodyInfo>({
+    height_cm: '', weight_kg: '', activity_level: '', health_goals: [], date_of_birth: '',
+  });
+
+  // Avatar
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [cropFile, setCropFile] = useState<File | null>(null);
+  const [cropFile, setCropFile]   = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
 
-  const [slug, setSlug] = useState('');
+  // Chef
+  const [slug, setSlug]             = useState('');
   const [slugStatus, setSlugStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [becomingChef, setBecomingChef] = useState(false);
-  const [chefSuccess, setChefSuccess] = useState(false);
+  const [chefSuccess, setChefSuccess]   = useState(false);
 
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState('');
+  const [msg, setMsg]       = useState('');
 
   useEffect(() => {
     const t = tok();
@@ -127,8 +151,21 @@ export default function ProfilePage() {
         setName(d.full_name || '');
         setPhone(d.phone || '');
         setGender(d.gender || '');
-        setAddress(d.address || '');
+        setAddrLine1(d.address_line1 || '');
+        setAddrLine2(d.address_line2 || '');
+        setCity(d.city || '');
+        setPostcode(d.postcode || '');
+        setLat(d.latitude != null ? String(d.latitude) : '');
+        setLng(d.longitude != null ? String(d.longitude) : '');
         setAvatarUrl(d.profile_pic || null);
+        const bi = d.body_info || {};
+        setBody({
+          height_cm: bi.height_cm ? String(bi.height_cm) : '',
+          weight_kg: bi.weight_kg ? String(bi.weight_kg) : '',
+          activity_level: bi.activity_level || '',
+          health_goals: bi.health_goals || [],
+          date_of_birth: bi.date_of_birth || '',
+        });
       }).catch(() => {});
   }, []);
 
@@ -143,6 +180,21 @@ export default function ProfilePage() {
     return () => clearTimeout(t);
   }, [slug]);
 
+  const geocodeAddress = async () => {
+    const q = [addrLine1, addrLine2, city, postcode].filter(Boolean).join(', ');
+    if (!q) return;
+    setGeocoding(true);
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
+      const data = await res.json();
+      if (data?.[0]) {
+        setLat(parseFloat(data[0].lat).toFixed(6));
+        setLng(parseFloat(data[0].lon).toFixed(6));
+      }
+    } catch {}
+    setGeocoding(false);
+  };
+
   const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) { setCropFile(f); e.target.value = ''; }
@@ -154,9 +206,7 @@ export default function ProfilePage() {
       const fd = new FormData();
       fd.append('file', blob, 'avatar.jpg');
       const r = await fetch(`${API}/auth/me/avatar`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${tok()}` },
-        body: fd,
+        method: 'POST', headers: { Authorization: `Bearer ${tok()}` }, body: fd,
       });
       if (r.ok) { const d = await r.json(); setAvatarUrl(d.url); }
     } finally { setUploading(false); }
@@ -165,14 +215,31 @@ export default function ProfilePage() {
   const handleSave = async () => {
     setSaving(true); setMsg('');
     try {
+      const body_info = {
+        height_cm: body.height_cm ? parseFloat(body.height_cm) : null,
+        weight_kg: body.weight_kg ? parseFloat(body.weight_kg) : null,
+        activity_level: body.activity_level || null,
+        health_goals: body.health_goals,
+        date_of_birth: body.date_of_birth || null,
+      };
       const r = await fetch(`${API}/auth/me`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${tok()}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ full_name: name.trim(), phone: phone.trim() || null, gender: gender || null, address: address.trim() || null }),
+        body: JSON.stringify({
+          full_name: name.trim(),
+          phone: phone.trim() || null,
+          gender: gender || null,
+          address_line1: addrLine1.trim() || null,
+          address_line2: addrLine2.trim() || null,
+          city: city.trim() || null,
+          postcode: postcode.trim() || null,
+          latitude: lat ? parseFloat(lat) : null,
+          longitude: lng ? parseFloat(lng) : null,
+          body_info,
+        }),
       });
       if (r.ok) {
         setMsg('Saved!');
-        setUser(u => u ? { ...u, full_name: name.trim(), phone: phone.trim() || null, gender: gender || null, address: address.trim() || null } : u);
       } else { setMsg('Failed to save.'); }
     } catch { setMsg('Network error.'); }
     setSaving(false);
@@ -190,7 +257,7 @@ export default function ProfilePage() {
       });
       if (r.ok) {
         setChefSuccess(true);
-        setUser(u => u ? { ...u, user_type: 'Chef' } : u);
+        setUser((u: any) => u ? { ...u, user_type: 'Chef' } : u);
       } else {
         const d = await r.json().catch(() => ({}));
         setMsg(d.detail || 'Failed.'); setTimeout(() => setMsg(''), 4000);
@@ -206,18 +273,19 @@ export default function ProfilePage() {
     router.push('/');
   };
 
+  const toggleGoal = (g: string) =>
+    setBody(b => ({ ...b, health_goals: b.health_goals.includes(g) ? b.health_goals.filter(x => x !== g) : [...b.health_goals, g] }));
+
   const initials = (user?.full_name || user?.email || 'U').trim().charAt(0).toUpperCase();
   const isChef = !!(user?.user_type && CHEF_TYPES.includes(user.user_type));
 
-  // No own top-bar — MainLayout provides the header with ← Chat back button
   return (
     <div style={{ maxWidth: 680, margin: '0 auto', padding: '16px 16px 60px', fontFamily: 'inherit', color: 'var(--text-primary,#F5EFE6)' }}>
       {cropFile && <CropModal file={cropFile} onConfirm={handleCropConfirm} onCancel={() => setCropFile(null)} />}
 
-      {/* Page title */}
       <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 18, color: 'var(--text-primary,#F5EFE6)' }}>My Profile</h2>
 
-      {/* ── Profile hero: avatar left, info right ── */}
+      {/* ── Profile hero ── */}
       <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 18, marginBottom: 16 }}>
         <div style={{ position: 'relative', flexShrink: 0 }}>
           <div
@@ -256,7 +324,7 @@ export default function ProfilePage() {
         )}
       </div>
 
-      {/* ── Personal Information + Address ── */}
+      {/* ── Personal Information ── */}
       <div style={card}>
         <p style={cardH}><span>👤</span> Personal Information</p>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
@@ -279,23 +347,128 @@ export default function ProfilePage() {
               {GENDERS.map(g => <option key={g} value={g}>{g}</option>)}
             </select>
           </div>
-          <div style={{ gridColumn: '1 / -1' }}>
-            <label style={lbl}>Address</label>
-            <textarea
-              style={{ ...inp, resize: 'vertical', minHeight: 72, lineHeight: 1.5 } as React.CSSProperties}
-              value={address}
-              onChange={e => setAddress(e.target.value)}
-              placeholder="Street, city, postcode…"
-            />
-          </div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <button style={btn} disabled={saving} onClick={handleSave}>{saving ? 'Saving…' : 'Save Changes'}</button>
-          {msg && <span style={{ fontSize: 12, color: msg === 'Saved!' ? '#4ADE80' : '#F87171' }}>{msg}</span>}
         </div>
       </div>
 
-      {/* ── Chef section — different for chef vs non-chef ── */}
+      {/* ── Address ── */}
+      <div style={card}>
+        <p style={cardH}><span>📍</span> Address</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={lbl}>Address Line 1</label>
+            <input style={inp} value={addrLine1} onChange={e => setAddrLine1(e.target.value)} placeholder="Flat / House number, Street" />
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={lbl}>Address Line 2</label>
+            <input style={inp} value={addrLine2} onChange={e => setAddrLine2(e.target.value)} placeholder="Building / Complex name (optional)" />
+          </div>
+          <div>
+            <label style={lbl}>City</label>
+            <input style={inp} value={city} onChange={e => setCity(e.target.value)} placeholder="City" />
+          </div>
+          <div>
+            <label style={lbl}>Postcode</label>
+            <input style={inp} value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="Postcode / PIN" />
+          </div>
+          <div>
+            <label style={lbl}>Latitude</label>
+            <input style={inp} value={lat} onChange={e => setLat(e.target.value)} placeholder="e.g. 51.5074" />
+          </div>
+          <div>
+            <label style={lbl}>Longitude</label>
+            <input style={inp} value={lng} onChange={e => setLng(e.target.value)} placeholder="e.g. -0.1278" />
+          </div>
+        </div>
+        <button
+          onClick={geocodeAddress}
+          disabled={geocoding}
+          style={{ ...btn, background: 'rgba(249,115,22,0.12)', color: '#F97316', border: '1px solid rgba(249,115,22,0.3)', padding: '7px 16px', fontWeight: 600 }}
+        >
+          {geocoding ? '⏳ Locating…' : '📍 Auto-detect coordinates from address'}
+        </button>
+        <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 6 }}>Uses address fields above to fill latitude &amp; longitude automatically.</p>
+      </div>
+
+      {/* ── Body & Lifestyle ── */}
+      <div style={card}>
+        <p style={cardH}><span>💪</span> Body &amp; Lifestyle</p>
+        <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', marginBottom: 14, lineHeight: 1.6 }}>
+          This information helps AI personalise meal plans and recipe suggestions for your health goals.
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 14 }}>
+          <div>
+            <label style={lbl}>Height (cm)</label>
+            <input type="number" min="50" max="250" style={inp} value={body.height_cm}
+              onChange={e => setBody(b => ({ ...b, height_cm: e.target.value }))} placeholder="e.g. 170" />
+          </div>
+          <div>
+            <label style={lbl}>Weight (kg)</label>
+            <input type="number" min="20" max="500" style={inp} value={body.weight_kg}
+              onChange={e => setBody(b => ({ ...b, weight_kg: e.target.value }))} placeholder="e.g. 70" />
+          </div>
+          <div>
+            <label style={lbl}>Date of Birth</label>
+            <input type="date" style={{ ...inp, colorScheme: 'dark' }} value={body.date_of_birth}
+              onChange={e => setBody(b => ({ ...b, date_of_birth: e.target.value }))} />
+          </div>
+        </div>
+
+        <div style={{ marginBottom: 14 }}>
+          <label style={lbl}>Activity Level</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {ACTIVITY_LEVELS.map(level => {
+              const active = body.activity_level === level;
+              return (
+                <button
+                  key={level}
+                  type="button"
+                  onClick={() => setBody(b => ({ ...b, activity_level: active ? '' : level }))}
+                  style={{
+                    padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer', fontFamily: 'inherit',
+                    background: active ? 'rgba(249,115,22,0.2)' : 'rgba(255,255,255,0.06)',
+                    color: active ? '#F97316' : 'rgba(255,255,255,0.5)',
+                    border: `1px solid ${active ? 'rgba(249,115,22,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >{level}</button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label style={lbl}>Health Goals <span style={{ opacity: 0.5, fontWeight: 400 }}>(select all that apply)</span></label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+            {HEALTH_GOALS.map(goal => {
+              const active = body.health_goals.includes(goal);
+              return (
+                <button
+                  key={goal}
+                  type="button"
+                  onClick={() => toggleGoal(goal)}
+                  style={{
+                    padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer', fontFamily: 'inherit',
+                    background: active ? 'rgba(74,222,128,0.15)' : 'rgba(255,255,255,0.06)',
+                    color: active ? '#4ade80' : 'rgba(255,255,255,0.5)',
+                    border: `1px solid ${active ? 'rgba(74,222,128,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >{goal}</button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Save button */}
+      <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button style={{ ...btn, padding: '10px 28px' }} disabled={saving} onClick={handleSave}>
+          {saving ? 'Saving…' : 'Save All Changes'}
+        </button>
+        {msg && <span style={{ fontSize: 12, color: msg === 'Saved!' ? '#4ADE80' : '#F87171' }}>{msg}</span>}
+      </div>
+
+      {/* ── Chef section ── */}
       {isChef ? (
         <div style={{ ...card, border: '1px solid rgba(249,115,22,0.2)', background: 'rgba(249,115,22,0.04)' }}>
           <p style={cardH}><span>👨‍🍳</span> Chef Profile</p>
@@ -367,7 +540,6 @@ export default function ProfilePage() {
         onClick={handleLogout}
         style={{ width: '100%', padding: '10px', borderRadius: 12, border: '1px solid rgba(239,68,68,0.25)', background: 'transparent', color: '#F87171', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'inherit' }}
       >🚪 Log Out</button>
-
     </div>
   );
 }

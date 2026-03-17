@@ -469,3 +469,73 @@ def run_startup_migrations() -> None:
                     logger.info("Seeded meal_plan_option table with default options")
     except Exception:
         logger.exception("Failed to create meal_plan_option table (continuing)")
+
+    # subscription_package and package_feature_limit tables
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS subscription_package (
+                      id            SERIAL PRIMARY KEY,
+                      name          TEXT NOT NULL UNIQUE,
+                      display_name  TEXT NOT NULL,
+                      description   TEXT,
+                      price_monthly NUMERIC(10,2) NOT NULL DEFAULT 0,
+                      price_yearly  NUMERIC(10,2) NOT NULL DEFAULT 0,
+                      is_active     BOOLEAN NOT NULL DEFAULT TRUE,
+                      sort_order    SMALLINT NOT NULL DEFAULT 0,
+                      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS package_feature_limit (
+                      id           SERIAL PRIMARY KEY,
+                      package_id   INTEGER NOT NULL REFERENCES subscription_package(id) ON DELETE CASCADE,
+                      feature      TEXT NOT NULL CHECK (feature IN ('ai_recipe','meal_plan','ai_video')),
+                      period       TEXT NOT NULL CHECK (period IN ('daily','monthly')),
+                      limit_value  INTEGER,
+                      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (package_id, feature, period)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pkg_feat_limit_pkg ON package_feature_limit(package_id)")
+                conn.commit()
+                # Seed free and pro packages only if table is empty
+                cur.execute("SELECT COUNT(*) AS cnt FROM subscription_package")
+                if cur.fetchone()["cnt"] == 0:
+                    pkg_seeds = [
+                        ("free", "Free",  "Basic access with limited AI features", 0,    0,     True,  0),
+                        ("pro",  "Pro",   "Full access with AI meal planning & generation", 9.99, 99.99, True, 1),
+                    ]
+                    free_limits = [
+                        ("ai_recipe", "daily",   3),
+                        ("ai_recipe", "monthly", 10),
+                        ("meal_plan", "monthly", 0),   # 0 = blocked for free users
+                        ("ai_video",  "daily",   1),
+                        ("ai_video",  "monthly", 3),
+                    ]
+                    pro_limits = [
+                        ("ai_recipe", "daily",   25),
+                        ("ai_recipe", "monthly", None),  # None = unlimited
+                        ("meal_plan", "monthly", None),  # None = unlimited
+                        ("ai_video",  "daily",   10),
+                        ("ai_video",  "monthly", None),  # None = unlimited
+                    ]
+                    pkg_limits_map = {"free": free_limits, "pro": pro_limits}
+                    for name, display_name, description, price_monthly, price_yearly, is_active, sort_order in pkg_seeds:
+                        cur.execute(
+                            "INSERT INTO subscription_package (name,display_name,description,price_monthly,price_yearly,is_active,sort_order) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                            (name, display_name, description, price_monthly, price_yearly, is_active, sort_order),
+                        )
+                        pkg_id = cur.fetchone()["id"]
+                        for feature, period, limit_value in pkg_limits_map[name]:
+                            cur.execute(
+                                "INSERT INTO package_feature_limit (package_id,feature,period,limit_value) VALUES (%s,%s,%s,%s)",
+                                (pkg_id, feature, period, limit_value),
+                            )
+                    conn.commit()
+                    logger.info("Seeded subscription_package and package_feature_limit tables")
+    except Exception:
+        logger.exception("Failed to create subscription_package tables (continuing)")

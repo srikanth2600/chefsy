@@ -21,23 +21,22 @@ DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 # ---------------------------------------------------------------------------
 
 def check_premium(user_id: int) -> None:
-    """Raise 403 if the user does not have a pro/premium plan."""
+    """Raise 403 if the user's package does not allow meal plan generation."""
+    from app.core.packages import get_user_plan, has_feature_access
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # Check chef_profile first
-            cur.execute("SELECT plan FROM chef_profile WHERE user_id = %s", (user_id,))
-            r = cur.fetchone()
-            if r and r.get("plan") == "pro":
-                return
-            # Fall back to users.user_type for Developer / Admin bypass
+            # Developer / Admin bypass
             cur.execute("SELECT user_type FROM users WHERE id = %s", (user_id,))
             u = cur.fetchone()
             if u and u.get("user_type") in ("Developer", "Admin"):
                 return
+    plan = get_user_plan(user_id)
+    if has_feature_access(plan, "meal_plan"):
+        return
     raise HTTPException(
         status_code=403,
         detail={
-            "message": "Meal planning requires Premium",
+            "message": "Meal planning requires a Premium package",
             "upgrade_url": "/upgrade",
             "feature": "ai_meal_planner",
         },
@@ -172,9 +171,9 @@ RULES:
     user_message = f"Generate a 7-day meal plan. Dietary: {dietary}. Allergies: {allergies}. Cuisine: {cuisine}. Servings: {servings}."
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(api_key=settings.groq_api_key, base_url=settings.groq_base_url)
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.groq_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},

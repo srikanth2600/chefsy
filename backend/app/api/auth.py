@@ -397,7 +397,10 @@ def me(request: Request):
                 """
                 SELECT u.id, u.full_name, u.email, u.phone, u.user_type, u.is_verified,
                        u.is_admin, u.designation, u.permissions_json, u.profile_pic,
-                       u.gender, u.address, ut.expires_at
+                       u.gender, u.address,
+                       u.address_line1, u.address_line2, u.city, u.postcode,
+                       u.latitude, u.longitude, u.body_info,
+                       ut.expires_at
                 FROM user_token ut
                 JOIN users u ON u.id = ut.user_id
                 WHERE ut.token = %s AND (ut.expires_at IS NULL OR ut.expires_at > NOW())
@@ -420,6 +423,13 @@ def me(request: Request):
                 "profile_pic": row.get("profile_pic"),
                 "gender": row.get("gender"),
                 "address": row.get("address"),
+                "address_line1": row.get("address_line1"),
+                "address_line2": row.get("address_line2"),
+                "city": row.get("city"),
+                "postcode": row.get("postcode"),
+                "latitude": float(row["latitude"]) if row.get("latitude") is not None else None,
+                "longitude": float(row["longitude"]) if row.get("longitude") is not None else None,
+                "body_info": row.get("body_info") or {},
             }
 
 
@@ -445,13 +455,28 @@ class UpdateProfileRequest(BaseModel):
     phone: Optional[str] = None
     gender: Optional[str] = None
     address: Optional[str] = None
+    address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
+    city: Optional[str] = None
+    postcode: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    body_info: Optional[dict] = None
 
 
 @router.put("/me")
 def update_me(req: UpdateProfileRequest, request: Request):
     """Update authenticated user's profile fields."""
+    from psycopg.types.json import Json as _Json
     user_id = _get_user_id_from_token(request)
-    fields = {k: v for k, v in req.model_dump().items() if v is not None}
+    fields: dict = {}
+    for k, v in req.model_dump().items():
+        if v is None:
+            continue
+        if k == "body_info" and isinstance(v, dict):
+            fields[k] = _Json(v)
+        else:
+            fields[k] = v
     if not fields:
         return {"status": "ok"}
     set_clause = ", ".join(f"{k} = %s" for k in fields)

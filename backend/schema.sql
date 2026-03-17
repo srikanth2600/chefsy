@@ -147,6 +147,15 @@ ALTER TABLE IF EXISTS users
   ADD COLUMN IF NOT EXISTS gender TEXT;
 ALTER TABLE IF EXISTS users
   ADD COLUMN IF NOT EXISTS address TEXT;
+-- Structured address fields
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS address_line1 TEXT;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS address_line2 TEXT;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS city TEXT;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS postcode TEXT;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION;
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+-- Body & lifestyle info (height, weight, activity level, goals, etc.)
+ALTER TABLE IF EXISTS users ADD COLUMN IF NOT EXISTS body_info JSONB;
 -- Ensure email is unique so ON CONFLICT (email) works in registration
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email);
 
