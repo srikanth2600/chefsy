@@ -33,8 +33,10 @@ const NAV = [
   {
     label: 'Configuration',
     items: [
-      { id: 'chef-roles',  href: '/adminpanel/chef-roles',  icon: '🏷',  label: 'Chef Roles' },
-      { id: 'categories',  href: '/adminpanel/categories',  icon: '📂',  label: 'Categories' },
+      { id: 'chef-roles',       href: '/adminpanel/chef-roles',       icon: '🏷',  label: 'Chef Roles' },
+      { id: 'categories',       href: '/adminpanel/categories',       icon: '📂',  label: 'Categories' },
+      { id: 'meal-plan-options', href: '/adminpanel/meal-plan-options', icon: '🥗',  label: 'Meal Plan Options' },
+      { id: 'meal-plans',        href: '/adminpanel/meal-plans',        icon: '🍽️',  label: 'Meal Plans' },
     ],
   },
   {

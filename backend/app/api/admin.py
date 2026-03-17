@@ -1203,3 +1203,82 @@ def admin_delete_meal_plan(plan_id: int, request: Request):
             conn.commit()
     return {"status": "ok"}
 
+
+# ---------------------------------------------------------------------------
+# Meal Plan Options (dietary / allergy / cuisine)
+# ---------------------------------------------------------------------------
+
+class MealPlanOptionBody(BaseModel):
+    category: str
+    label: str
+    sort_order: int = 0
+    is_active: bool = True
+
+
+@router.get("/meal-plan-options")
+def admin_list_meal_plan_options(request: Request, category: str = ""):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if category:
+                cur.execute(
+                    "SELECT * FROM meal_plan_option WHERE category = %s ORDER BY sort_order, label",
+                    (category,),
+                )
+            else:
+                cur.execute("SELECT * FROM meal_plan_option ORDER BY category, sort_order, label")
+            return [dict(r) for r in cur.fetchall()]
+
+
+@router.post("/meal-plan-options")
+def admin_create_meal_plan_option(request: Request, body: MealPlanOptionBody):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    if body.category not in ("dietary", "allergy", "cuisine"):
+        raise HTTPException(status_code=422, detail="category must be dietary, allergy or cuisine")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO meal_plan_option (category, label, sort_order, is_active) VALUES (%s, %s, %s, %s) RETURNING *",
+                (body.category, body.label.strip(), body.sort_order, body.is_active),
+            )
+            row = dict(cur.fetchone())
+            conn.commit()
+    row["created_at"] = str(row["created_at"])
+    return row
+
+
+@router.put("/meal-plan-options/{option_id}")
+def admin_update_meal_plan_option(option_id: int, request: Request, body: MealPlanOptionBody):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE meal_plan_option SET label = %s, sort_order = %s, is_active = %s WHERE id = %s RETURNING *",
+                (body.label.strip(), body.sort_order, body.is_active, option_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Option not found")
+            row = dict(row)
+            conn.commit()
+    row["created_at"] = str(row["created_at"])
+    return row
+
+
+@router.delete("/meal-plan-options/{option_id}")
+def admin_delete_meal_plan_option(option_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM meal_plan_option WHERE id = %s", (option_id,))
+            conn.commit()
+    return {"status": "ok"}
+

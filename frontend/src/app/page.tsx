@@ -463,6 +463,13 @@ export default function Home() {
             <span style={{fontSize:15,flexShrink:0}}>👨‍🍳</span>
             {drawerOpen && <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>Find a Chef</span>}
           </a>
+          {/* Meal Planner */}
+          <a href="/meal-plans" style={{ width:'100%', display:'flex', alignItems:'center', justifyContent:drawerOpen?'flex-start':'center', gap:8, padding:drawerOpen?'8px 12px':'8px', borderRadius:10, textDecoration:'none', color:'var(--text-secondary)', fontSize:13, fontWeight:500, fontFamily:'inherit', transition:'background 0.15s,color 0.15s' }}
+            onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='var(--accent-alpha-10)';(e.currentTarget as HTMLElement).style.color='var(--text-primary)';}}
+            onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent';(e.currentTarget as HTMLElement).style.color='var(--text-secondary)';}}>
+            <span style={{fontSize:15,flexShrink:0}}>🗓️</span>
+            {drawerOpen && <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>Meal Planner</span>}
+          </a>
           {/* Chef-only section — Manage Profile & Manage Recipes */}
           {userName && (userType === 'Chef' || userType === 'Restaurant/Foodcourt') && (<>
             <div style={{height:1,background:'var(--border)',margin:'4px 4px'}}/>

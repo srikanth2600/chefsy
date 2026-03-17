@@ -6,8 +6,6 @@ import { useRouter } from 'next/navigation';
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8005';
 const tok = () => { try { return localStorage.getItem('gharka_token') || ''; } catch { return ''; } };
 
-const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
 interface Plan {
   id: number;
   name: string;
@@ -19,29 +17,48 @@ interface Plan {
   slot_count: number;
 }
 
+interface Options {
+  dietary: string[];
+  allergy: string[];
+  cuisine: string[];
+}
+
 interface GenerateForm {
   name: string;
-  dietary_preferences: string;
-  allergies: string;
+  dietary_preferences: string[];
+  allergies: string[];
   servings: number;
   cuisine_preference: string;
 }
 
+function toggle(arr: string[], val: string): string[] {
+  return arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val];
+}
+
 export default function MealPlansPage() {
   const router = useRouter();
-  const [plans, setPlans] = useState<Plan[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [plans, setPlans]           = useState<Plan[]>([]);
+  const [options, setOptions]       = useState<Options>({ dietary: [], allergy: [], cuisine: [] });
+  const [loading, setLoading]       = useState(true);
   const [generating, setGenerating] = useState(false);
-  const [error, setError] = useState('');
-  const [showModal, setShowModal] = useState(false);
+  const [error, setError]           = useState('');
+  const [showModal, setShowModal]   = useState(false);
   const [upgradeRequired, setUpgradeRequired] = useState(false);
   const [form, setForm] = useState<GenerateForm>({
     name: '',
-    dietary_preferences: '',
-    allergies: '',
+    dietary_preferences: [],
+    allergies: [],
     servings: 2,
     cuisine_preference: '',
   });
+
+  // Fetch available options for the generate modal (no auth needed)
+  useEffect(() => {
+    fetch(`${API}/meal-plans/options`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setOptions(d); })
+      .catch(() => {});
+  }, []);
 
   const fetchPlans = async () => {
     const token = tok();
@@ -79,8 +96,8 @@ export default function MealPlansPage() {
     try {
       const body = {
         name: form.name || undefined,
-        dietary_preferences: form.dietary_preferences ? form.dietary_preferences.split(',').map(s => s.trim()).filter(Boolean) : [],
-        allergies: form.allergies ? form.allergies.split(',').map(s => s.trim()).filter(Boolean) : [],
+        dietary_preferences: form.dietary_preferences,
+        allergies: form.allergies,
         servings: form.servings,
         cuisine_preference: form.cuisine_preference || undefined,
       };
@@ -227,12 +244,13 @@ export default function MealPlansPage() {
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
           onClick={e => { if (e.target === e.currentTarget) setShowModal(false); }}
         >
-          <div style={{ background: 'var(--bg-surface)', borderRadius: 'var(--radius-lg, 16px)', padding: 28, width: '100%', maxWidth: 460, border: '1px solid var(--border, rgba(255,255,255,0.1))' }}>
+          <div style={{ background: 'var(--bg-surface)', borderRadius: 'var(--radius-lg, 16px)', padding: 28, width: '100%', maxWidth: 560, maxHeight: '90vh', overflowY: 'auto', border: '1px solid var(--border, rgba(255,255,255,0.1))' }}>
             <h2 style={{ fontSize: 18, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>Generate Meal Plan</h2>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, marginBottom: 20 }}>
               AI will create a 7-day personalised meal plan for you.
             </p>
-            <form onSubmit={handleGenerate} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <form onSubmit={handleGenerate} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Plan name */}
               <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
                 Plan name
                 <input
@@ -242,46 +260,114 @@ export default function MealPlansPage() {
                   style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
                 />
               </label>
-              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                Dietary preferences <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(comma-separated)</span>
-                <input
-                  value={form.dietary_preferences}
-                  onChange={e => setForm(f => ({ ...f, dietary_preferences: e.target.value }))}
-                  placeholder="vegetarian, high-protein"
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
-                />
+
+              {/* Dietary preferences — checkboxes */}
+              {options.dietary.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                    🥦 Dietary preferences
+                    {form.dietary_preferences.length > 0 && (
+                      <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--claude-orange)' }}>
+                        {form.dietary_preferences.length} selected
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {options.dietary.map(opt => {
+                      const selected = form.dietary_preferences.includes(opt);
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, dietary_preferences: toggle(f.dietary_preferences, opt) }))}
+                          style={{
+                            padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer', fontWeight: selected ? 600 : 400,
+                            background: selected ? 'rgba(74,222,128,0.2)' : 'rgba(255,255,255,0.06)',
+                            color: selected ? '#4ade80' : 'var(--text-secondary)',
+                            border: `1px solid ${selected ? 'rgba(74,222,128,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                          }}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Allergies — checkboxes */}
+              {options.allergy.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>
+                    ⚠️ Allergies / avoid
+                    {form.allergies.length > 0 && (
+                      <span style={{ marginLeft: 8, fontSize: 11, color: '#f87171' }}>
+                        {form.allergies.length} selected
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {options.allergy.map(opt => {
+                      const selected = form.allergies.includes(opt);
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, allergies: toggle(f.allergies, opt) }))}
+                          style={{
+                            padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer', fontWeight: selected ? 600 : 400,
+                            background: selected ? 'rgba(248,113,113,0.2)' : 'rgba(255,255,255,0.06)',
+                            color: selected ? '#f87171' : 'var(--text-secondary)',
+                            border: `1px solid ${selected ? 'rgba(248,113,113,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                          }}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Cuisine — single-select chips */}
+              {options.cuisine.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>🌍 Cuisine</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {options.cuisine.map(opt => {
+                      const selected = form.cuisine_preference === opt;
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setForm(f => ({ ...f, cuisine_preference: selected ? '' : opt }))}
+                          style={{
+                            padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer', fontWeight: selected ? 600 : 400,
+                            background: selected ? 'rgba(96,165,250,0.2)' : 'rgba(255,255,255,0.06)',
+                            color: selected ? '#60a5fa' : 'var(--text-secondary)',
+                            border: `1px solid ${selected ? 'rgba(96,165,250,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                          }}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Servings */}
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 12 }}>
+                <span>Servings per meal</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <button type="button" onClick={() => setForm(f => ({ ...f, servings: Math.max(1, f.servings - 1) }))}
+                    style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border, rgba(255,255,255,0.1))', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>−</button>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', minWidth: 20, textAlign: 'center' }}>{form.servings}</span>
+                  <button type="button" onClick={() => setForm(f => ({ ...f, servings: Math.min(10, f.servings + 1) }))}
+                    style={{ width: 28, height: 28, borderRadius: 6, border: '1px solid var(--border, rgba(255,255,255,0.1))', background: 'var(--bg)', color: 'var(--text-primary)', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>+</button>
+                </div>
               </label>
-              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                Allergies / avoid <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(comma-separated)</span>
-                <input
-                  value={form.allergies}
-                  onChange={e => setForm(f => ({ ...f, allergies: e.target.value }))}
-                  placeholder="nuts, dairy"
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
-                />
-              </label>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <label style={{ fontSize: 13, color: 'var(--text-secondary)', flex: 1 }}>
-                  Servings
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={form.servings}
-                    onChange={e => setForm(f => ({ ...f, servings: Number(e.target.value) }))}
-                    style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
-                  />
-                </label>
-                <label style={{ fontSize: 13, color: 'var(--text-secondary)', flex: 1 }}>
-                  Cuisine
-                  <input
-                    value={form.cuisine_preference}
-                    onChange={e => setForm(f => ({ ...f, cuisine_preference: e.target.value }))}
-                    placeholder="any"
-                    style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box' }}
-                  />
-                </label>
-              </div>
+
               {error && <div style={{ color: 'var(--error, #E06B6B)', fontSize: 12 }}>{error}</div>}
               <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
                 <button

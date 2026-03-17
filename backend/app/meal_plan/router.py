@@ -47,6 +47,23 @@ def _require_owner(user_id: int, plan_id: int) -> dict:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+@router.get("/options")
+def get_options():
+    """Return active dietary / allergy / cuisine options for the generate modal."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT category, label FROM meal_plan_option WHERE is_active = TRUE ORDER BY category, sort_order, label"
+            )
+            rows = cur.fetchall()
+    grouped: dict = {"dietary": [], "allergy": [], "cuisine": []}
+    for r in rows:
+        cat = r["category"]
+        if cat in grouped:
+            grouped[cat].append(r["label"])
+    return grouped
+
+
 @router.get("")
 def list_plans(
     request: Request,

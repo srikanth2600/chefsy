@@ -419,3 +419,53 @@ def run_startup_migrations() -> None:
                         break
     except Exception:
         logger.exception("Failed to migrate chat_content_block block_type constraint (continuing)")
+
+    # Create meal_plan_option table and seed default options
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS meal_plan_option (
+                        id         SERIAL PRIMARY KEY,
+                        category   TEXT NOT NULL CHECK (category IN ('dietary','allergy','cuisine')),
+                        label      TEXT NOT NULL,
+                        sort_order SMALLINT NOT NULL DEFAULT 0,
+                        is_active  BOOLEAN NOT NULL DEFAULT TRUE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (category, label)
+                    )
+                    """
+                )
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_plan_option_category ON meal_plan_option(category)")
+                conn.commit()
+                # Seed defaults only if table is empty
+                cur.execute("SELECT COUNT(*) AS cnt FROM meal_plan_option")
+                if cur.fetchone()["cnt"] == 0:
+                    seeds = [
+                        ("dietary", "Vegetarian", 0), ("dietary", "Vegan", 1),
+                        ("dietary", "Gluten-Free", 2), ("dietary", "Dairy-Free", 3),
+                        ("dietary", "High-Protein", 4), ("dietary", "Low-Carb", 5),
+                        ("dietary", "Keto", 6), ("dietary", "Paleo", 7),
+                        ("dietary", "Halal", 8), ("dietary", "Kosher", 9),
+                        ("allergy", "Nuts", 0), ("allergy", "Peanuts", 1),
+                        ("allergy", "Dairy", 2), ("allergy", "Eggs", 3),
+                        ("allergy", "Shellfish", 4), ("allergy", "Fish", 5),
+                        ("allergy", "Soy", 6), ("allergy", "Wheat / Gluten", 7),
+                        ("allergy", "Sesame", 8),
+                        ("cuisine", "Indian", 0), ("cuisine", "Italian", 1),
+                        ("cuisine", "Mexican", 2), ("cuisine", "Chinese", 3),
+                        ("cuisine", "Japanese", 4), ("cuisine", "Mediterranean", 5),
+                        ("cuisine", "Thai", 6), ("cuisine", "Middle Eastern", 7),
+                        ("cuisine", "American", 8), ("cuisine", "French", 9),
+                        ("cuisine", "Korean", 10), ("cuisine", "Greek", 11),
+                    ]
+                    for category, label, sort_order in seeds:
+                        cur.execute(
+                            "INSERT INTO meal_plan_option (category, label, sort_order) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                            (category, label, sort_order),
+                        )
+                    conn.commit()
+                    logger.info("Seeded meal_plan_option table with default options")
+    except Exception:
+        logger.exception("Failed to create meal_plan_option table (continuing)")
