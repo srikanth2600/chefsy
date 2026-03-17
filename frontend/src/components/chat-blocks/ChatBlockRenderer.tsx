@@ -6,9 +6,10 @@ import RecipeCard from './RecipeCard';
 import YouTubeEmbed from './YouTubeEmbed';
 import AdBanner from './AdBanner';
 import ActionButton from './ActionButton';
+import MealPlanBlock from './MealPlanBlock';
 
 export type ChatBlock = {
-  block_type: 'text' | 'recipe' | 'video' | 'ad' | 'cta';
+  block_type: 'text' | 'recipe' | 'video' | 'ad' | 'cta' | 'meal_plan';
   content_json: Record<string, unknown>;
   display_order?: number;
 };
@@ -34,6 +35,8 @@ export default function ChatBlockRenderer({
       return <AdBanner content={content as { ad_id?: number; title?: string }} />;
     case 'cta':
       return <ActionButton content={content as { label?: string; url?: string }} recipe={recipe ?? undefined} />;
+    case 'meal_plan':
+      return <MealPlanBlock content={content as { plan_id?: number; plan_name?: string; summary?: Record<string, unknown> }} />;
     default:
       return null;
   }

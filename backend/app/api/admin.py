@@ -1102,3 +1102,104 @@ def admin_delete_message(message_id: int, request: Request):
             conn.commit()
     return {"status": "ok"}
 
+
+# ──────────────────────────────────────────────────────────────────────
+# Meal Plan admin endpoints
+# ──────────────────────────────────────────────────────────────────────
+
+@router.get("/meal-plans")
+def admin_list_meal_plans(
+    request: Request,
+    q: str = "",
+    status: str = "active",
+    page: int = 1,
+    per_page: int = 30,
+):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            base_filter = "WHERE mp.status = %s"
+            params: list = [status]
+            if q:
+                base_filter += " AND (u.full_name ILIKE %s OR u.email ILIKE %s OR mp.name ILIKE %s)"
+                like = f"%{q}%"
+                params += [like, like, like]
+            cur.execute(f"SELECT COUNT(*) AS cnt FROM meal_plan mp JOIN users u ON u.id = mp.user_id {base_filter}", params)
+            total = cur.fetchone()["cnt"]
+            cur.execute(
+                f"""
+                SELECT mp.id, mp.name, mp.description, mp.week_start_date, mp.servings,
+                       mp.status, mp.created_at,
+                       u.id AS user_id, u.full_name AS user_name, u.email AS user_email,
+                       COUNT(s.id) AS slot_count
+                FROM meal_plan mp
+                JOIN users u ON u.id = mp.user_id
+                LEFT JOIN meal_plan_slot s ON s.meal_plan_id = mp.id
+                {base_filter}
+                GROUP BY mp.id, u.id
+                ORDER BY mp.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                params + [per_page, (page - 1) * per_page],
+            )
+            rows = cur.fetchall()
+    plans = []
+    for r in rows:
+        d = dict(r)
+        d["created_at"] = str(d["created_at"])
+        if d.get("week_start_date"):
+            d["week_start_date"] = str(d["week_start_date"])
+        plans.append(d)
+    return {"plans": plans, "total": total, "page": page, "per_page": per_page}
+
+
+@router.get("/meal-plans/{plan_id}")
+def admin_get_meal_plan(plan_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT mp.*, u.full_name AS user_name, u.email AS user_email
+                FROM meal_plan mp JOIN users u ON u.id = mp.user_id
+                WHERE mp.id = %s
+                """,
+                (plan_id,),
+            )
+            plan = cur.fetchone()
+            if not plan:
+                raise HTTPException(status_code=404, detail="Meal plan not found")
+            cur.execute(
+                """
+                SELECT s.*, rm.title AS recipe_title, rm.recipe_key
+                FROM meal_plan_slot s
+                LEFT JOIN recipe_master rm ON rm.id = s.recipe_id
+                WHERE s.meal_plan_id = %s
+                ORDER BY s.day_index, s.sort_order
+                """,
+                (plan_id,),
+            )
+            slots = [dict(r) for r in cur.fetchall()]
+    plan_dict = dict(plan)
+    plan_dict["created_at"] = str(plan_dict["created_at"])
+    plan_dict["updated_at"] = str(plan_dict["updated_at"])
+    if plan_dict.get("week_start_date"):
+        plan_dict["week_start_date"] = str(plan_dict["week_start_date"])
+    return {"plan": plan_dict, "slots": slots}
+
+
+@router.delete("/meal-plans/{plan_id}")
+def admin_delete_meal_plan(plan_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM meal_plan WHERE id = %s", (plan_id,))
+            conn.commit()
+    return {"status": "ok"}
+

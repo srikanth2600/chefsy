@@ -76,6 +76,13 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           <span style={{ fontSize: 15 }}>👨‍🍳</span>
           {drawerOpen && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Find a Chef</span>}
         </a>
+        <a
+          href="/meal-plans"
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: drawerOpen ? 'flex-start' : 'center', gap: 8, padding: drawerOpen ? '8px 12px' : '8px', borderRadius: 10, textDecoration: 'none', color: pathname?.startsWith('/meal-plans') ? 'var(--accent)' : 'var(--text-secondary)', fontSize: 13, fontWeight: 500, fontFamily: 'inherit', transition: 'background 0.15s,color 0.15s', background: pathname?.startsWith('/meal-plans') ? 'var(--accent-alpha-10)' : 'transparent' }}
+        >
+          <span style={{ fontSize: 15 }}>🍽️</span>
+          {drawerOpen && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Meal Planner</span>}
+        </a>
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: drawerOpen ? '4px 8px' : '4px 6px', minHeight: 0 }}>
@@ -83,7 +90,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
         {recentChats.length === 0 ? (
           <div style={{ fontSize: 12, color: 'var(--text-tertiary)', paddingLeft: drawerOpen ? 8 : 0 }}>No chats yet</div>
         ) : (
-          recentChats.slice(0, 20).map((c) => (
+          recentChats.slice(0, 20).map((c: { chat_id: number; title: string }) => (
             <button
               key={c.chat_id}
               type="button"

@@ -11,6 +11,7 @@ from app.api import auth as auth_module
 from app.api import admin as admin_module
 from app.videos import router as videos_router
 from app.chef import router as chef_module
+from app.meal_plan import router as meal_plan_module
 from app.core.config import settings
 from app.core.db import init_db
 from app.application.recipe_service import generate_recipe
@@ -40,6 +41,8 @@ def create_app() -> FastAPI:
     app.include_router(videos_router.router, prefix="/videos")
     # chef module (public /chefs/* + dashboard /chef/me/*)
     app.include_router(chef_module.router, prefix="/chefs")
+    # meal plan module
+    app.include_router(meal_plan_module.router, prefix="/meal-plans")
     return app
 
 

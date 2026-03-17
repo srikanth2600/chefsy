@@ -360,3 +360,36 @@ CREATE TABLE IF NOT EXISTS recipe_category_map (
   category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
   UNIQUE (recipe_id, category_id)
 );
+
+-- Meal Plan
+CREATE TABLE IF NOT EXISTS meal_plan (
+  id               SERIAL PRIMARY KEY,
+  user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name             TEXT NOT NULL DEFAULT 'My Meal Plan',
+  description      TEXT,
+  week_start_date  DATE,
+  servings         INTEGER NOT NULL DEFAULT 2,
+  preferences_json JSONB,
+  status           TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_user_id    ON meal_plan(user_id);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_status     ON meal_plan(status);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_week_start ON meal_plan(week_start_date);
+
+CREATE TABLE IF NOT EXISTS meal_plan_slot (
+  id           SERIAL PRIMARY KEY,
+  meal_plan_id INTEGER NOT NULL REFERENCES meal_plan(id) ON DELETE CASCADE,
+  day_index    SMALLINT NOT NULL CHECK (day_index BETWEEN 0 AND 6),
+  meal_type    TEXT NOT NULL CHECK (meal_type IN ('breakfast','lunch','dinner','snack')),
+  recipe_id    INTEGER REFERENCES recipe_master(id) ON DELETE SET NULL,
+  meal_name    TEXT,
+  meal_json    JSONB,
+  sort_order   SMALLINT NOT NULL DEFAULT 0,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (meal_plan_id, day_index, meal_type)
+);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_slot_plan_id ON meal_plan_slot(meal_plan_id);
+CREATE INDEX IF NOT EXISTS idx_meal_plan_slot_recipe  ON meal_plan_slot(recipe_id);

@@ -4,7 +4,7 @@
 > the full project context, technical state, architecture, and development rules — before
 > making any changes or implementing new features.
 >
-> **Last Updated:** March 16 2026 — Chef Reels fully implemented. Like/dislike persistence fixed (missing auth header on reactions fetch). Recipe print (custom window + Chefsy logo) and social share popup (WhatsApp/Twitter/Facebook/Copy) added to RecipeMarkdown & RecipeHeader. Brand renamed to **Chefsy** in all print templates.
+> **Last Updated:** March 17 2026 — Expanded with full tech stack versions, complete page & component inventory, frontend design system, context providers, and backend service layer map.
 > **Environment:** All development and testing is done on **localhost** (local machine).
 > Deploy only after local testing is confirmed working.
 
@@ -46,17 +46,21 @@ c:/Users/Sam/Desktop/Gharka Chef/gharka-chef/
 
 ## 3. Tech Stack
 
-| Layer         | Technology                                      |
-|---------------|-------------------------------------------------|
-| Backend       | Python 3.11+, FastAPI, Uvicorn                  |
-| Database      | PostgreSQL 15 (`gharka_chef` db)                |
-| ORM/Driver    | psycopg3 (psycopg[binary]) — raw SQL, dict_row  |
-| Frontend      | Next.js 16.1.6, React 19, TypeScript, Tailwind v4 |
-| LLM Providers | OpenAI (gpt-4o-mini), Groq (llama-3.1-8b-instant), Ollama (local) |
-| Image Gen     | OpenAI gpt-image-1                              |
-| Cache         | Redis (optional, for SSE pub/sub)               |
-| Storage       | Local `/media` folder (planned: Cloudflare R2 / AWS S3) |
-| Auth          | Custom Bearer token + OTP via email (SMTP)      |
+| Layer         | Technology                                                    | Version / Notes                  |
+|---------------|---------------------------------------------------------------|----------------------------------|
+| Backend       | Python, FastAPI, Uvicorn                                      | Python 3.11+                     |
+| Database      | PostgreSQL (`gharka_chef` db)                                | v15                              |
+| ORM/Driver    | psycopg3 (`psycopg[binary]`) — raw SQL, dict_row             | psycopg3 (NOT psycopg2)          |
+| Frontend      | Next.js, React, TypeScript, Tailwind CSS                      | Next 16.1.6, React 19.2.3, TS ^5, Tailwind ^4 |
+| Canvas Export | html2canvas                                                   | ^1.4.1 (recipe poster generator) |
+| LLM Providers | OpenAI (gpt-4o-mini), Groq (llama-3.1-8b-instant), Ollama    | Provider-agnostic pipeline       |
+| Image Gen     | OpenAI gpt-image-1                                            | Ingredient + recipe images       |
+| Cache         | Redis (optional, for SSE pub/sub)                             | redis://localhost:6379/0         |
+| Storage       | Local `/media` folder                                        | Planned: Cloudflare R2 / AWS S3  |
+| Auth          | Custom Bearer token + OTP via email (SMTP)                    | SHA-256 hash (see bug #7)        |
+| HTTP Client   | httpx                                                         | ≥ 0.24.0                          |
+| Validation    | pydantic, pydantic-settings, email-validator                  | pydantic v2                      |
+| File Upload   | python-multipart                                              | Multipart form data              |
 
 ---
 
@@ -180,66 +184,102 @@ backend/
 
 ## 6. Frontend Architecture
 
-```
-frontend/src/
-├── app/
-│   ├── page.tsx                  → MAIN CHAT PAGE (~900 lines) — primary user interface
-│   ├── layout.tsx                → Root layout
-│   ├── globals.css               → Global styles + Tailwind
-│   ├── ingredientEmojis.ts       → Ingredient emoji map (also in backend)
-│   ├── admin/                    → Admin login page
-│   │   └── page.tsx
-│   ├── adminpanel/               → Full admin dashboard
-│   │   ├── page.tsx              → Admin panel home
-│   │   ├── layout.tsx            → Admin layout with sidebar
-│   │   ├── adminpage.tsx         → Main admin page component
-│   │   ├── users/                → User management
-│   │   ├── recipes/              → Recipe management
-│   │   ├── videos/               → Video management
-│   │   ├── chefs/                → Chef management
-│   │   ├── analytics/            → Analytics dashboard
-│   │   ├── ads/                  → Ads management
-│   │   ├── chats/                → Chat logs
-│   │   ├── feedback/             → User feedback
-│   │   ├── admins/               → Admin user management
-│   │   └── settings/             → App settings
-│   ├── chef/[slug]/              → Dynamic chef public profile page ⚠️ USES MOCK DATA
-│   ├── chef-dashboard/           → Chef's own dashboard (wired to real API)
-│   │   ├── layout.tsx            → Sidebar shell (nav + logout + theme toggle)
-│   │   ├── page.tsx              → Dashboard home (stats, recent recipes, plan usage)
-│   │   ├── profile/page.tsx      → Full profile editor (6 sections, crop upload, roles, categories)
-│   │   ├── recipes/page.tsx      → Recipe list + create/edit form
-│   │   ├── reels/page.tsx        → Reels management list (wired to real API)
-│   │   ├── reels/create/page.tsx → Add reel form (URL embed or file upload)
-│   │   └── analytics/page.tsx    → Analytics (Pro plan only)
-│   ├── find-chef/
-│   │   └── page.tsx              → Chef discovery page ⚠️ USES MOCK DATA (not DB-connected yet)
-│   ├── profile/                  → User profile page
-│   ├── video/                    → Single video page
-│   └── videos/                   → Videos listing page
-├── components/
-│   ├── RecipeDisplay.tsx         → Full recipe display component
-│   ├── RecipeHeader.tsx          → Recipe title, meta, tags
-│   ├── IngredientsSection.tsx    → Ingredient list with images/emojis
-│   ├── StepsSection.tsx          → Step-by-step cooking instructions
-│   ├── SearchBar.tsx             → Search/chat input (original)
-│   ├── SearchBarNew.tsx          → Updated search/chat input
-│   ├── RecipeMarkdown.tsx        → Markdown renderer for recipe text
-│   ├── ChefTip.tsx               → Chef tip display card
-│   ├── VideoSubmit.tsx           → Video submission component
-│   ├── MainLayout.tsx            → Page layout wrapper
-│   ├── RecipePosterCanvas.tsx    → Recipe poster image generator
-│   ├── RecipePosterView.tsx      → Recipe poster display
-│   ├── RecipeTextView.tsx        → Plain text recipe view
-│   ├── chat-blocks/              → Chat block type components
-│   └── chef/                     → Chef-specific UI components
-│       ├── ChefThemeContext.tsx  → Theme context for chef pages (light/dark)
-│       ├── ui.tsx                → Chef UI component library (Avatar, Pill, Btn, Stars, Card, etc.)
-│       └── types.ts              → TypeScript types: Chef, Recipe, ChefVideo, RecipeComment, RecipeIngredient
-├── context/                      → React context providers
-└── constants/                    → App-wide constants
-```
+### 6a. All Pages (Route Inventory)
 
+| Route | File | Status |
+|-------|------|--------|
+| `/` | `app/page.tsx` | ✅ Main AI chat + recipe search (~900 lines) |
+| `/profile` | `app/profile/page.tsx` | ✅ User profile page |
+| `/upgrade` | `app/upgrade/page.tsx` | ✅ Plan upgrade page |
+| `/find-chef` | `app/find-chef/page.tsx` | ⚠️ Uses MOCK data — not wired to real API |
+| `/chef/[slug]` | `app/chef/[slug]/page.tsx` | ⚠️ Uses MOCK data — not wired to real API |
+| `/videos/[id]` | `app/videos/[id]/page.tsx` | ✅ Single video detail |
+| `/admin` | `app/admin/page.tsx` | ✅ Admin login |
+| `/adminpanel` | `app/adminpanel/page.tsx` | ✅ Admin dashboard |
+
+**Admin Panel sub-pages** (all under `app/adminpanel/`):
+
+| Sub-route | Purpose |
+|-----------|---------|
+| `login/` | Admin authentication |
+| `users/` | User management (with `api.ts`, `types.ts`) |
+| `videos/` | Video management (with `api.ts`, `types.ts`) |
+| `chefs/` | Chef profile management |
+| `recipes/` | Recipe management |
+| `reels/` | Chef reels management |
+| `reviews/` | Recipe/chef reviews |
+| `messages/` | Message centre |
+| `chats/` | Chat log viewer |
+| `feedback/` | User feedback |
+| `ads/` | Ad banner management |
+| `analytics/` | Analytics dashboard |
+| `categories/` | Recipe category management |
+| `chef-roles/` | Chef role definitions |
+| `settings/` | App settings |
+| `admins/` | Admin user management |
+| `components/Shared.tsx` | Shared admin UI components |
+
+**Chef Dashboard sub-pages** (all under `app/chef-dashboard/`):
+
+| Sub-route | Purpose | API Status |
+|-----------|---------|------------|
+| `(home)` | Stats, recent recipes, plan usage | ✅ Real API |
+| `profile/` | Profile editor (6 sections, crop upload, roles, categories) | ✅ Real API |
+| `recipes/` | Recipe list + create/edit form | ✅ Real API |
+| `reels/` | Reels management list | ✅ Real API |
+| `reels/create/` | Add reel (URL embed or file upload) | ✅ Real API |
+| `reviews/` | Reviews of chef’s recipes | ✅ Real API |
+| `messages/` | Chef’s inbox | ✅ Real API |
+| `analytics/` | Analytics (Pro plan only) | ✅ Real API |
+| `upgrade/` | Plan upgrade page | ✅ |
+
+---
+
+### 6b. All Components
+
+**Top-level (`src/components/`)**
+
+| File | Purpose |
+|------|---------|
+| `MainLayout.tsx` | Page shell — sidebar + nav wrapper |
+| `SearchBar.tsx` | Original chat/search input |
+| `SearchBarNew.tsx` | Updated chat/search input (current) |
+| `RecipeDisplay.tsx` | Recipe display container |
+| `RecipeMarkdown.tsx` | AI-search recipe card — like/dislike persistence, social share popup (WhatsApp/Twitter/Facebook/Copy), custom print window with Chefsy logo |
+| `RecipeHeader.tsx` | Recipe header + banner image — same like/share/print actions as RecipeMarkdown |
+| `RecipeTextView.tsx` | Plain text recipe view |
+| `RecipePosterView.tsx` | Poster-style recipe card |
+| `RecipePosterCanvas.tsx` | html2canvas-based recipe poster image generator |
+| `IngredientsSection.tsx` | Ingredient list with images + emojis |
+| `StepsSection.tsx` | Step-by-step cooking instructions |
+| `ChefTip.tsx` | Chef tip display card |
+| `VideoSubmit.tsx` | Video submission form |
+
+**Chat blocks (`src/components/chat-blocks/`)**
+
+| File | Purpose |
+|------|---------|
+| `ChatBlockRenderer.tsx` | Dispatches `block_type` to the correct component |
+| `TextBlock.tsx` | Plain text chat message |
+| `RecipeCard.tsx` | Recipe card displayed inside the chat stream |
+| `YouTubeEmbed.tsx` | Embedded YouTube player block |
+| `ActionButton.tsx` | CTA buttons (Find Chef, Watch Video, etc.) |
+| `AdBanner.tsx` | Advertisement banner block |
+
+**Chef UI (`src/components/chef/`)**
+
+| File | Purpose |
+|------|---------|
+| `ui.tsx` | Chef component library — Avatar, Pill, Btn, Stars, Card, etc. |
+| `types.ts` | TypeScript types: `Chef`, `Recipe`, `ChefVideo`, `RecipeComment`, `RecipeIngredient` |
+| `ChefThemeContext.tsx` | Light/dark theme context for chef public profile pages |
+
+**Shared constants (`src/constants/`)**
+- `recipeTheme.ts` — Colour palette and ingredient category mappings
+
+**Shared context (`src/context/`)**
+- `SearchContext.tsx` — see § 17
+- `VideoContext.tsx` — see § 17
 ---
 
 ## 7. Database Schema (Complete Table Reference)
@@ -568,6 +608,132 @@ REDIS_URL=redis://localhost:6379/0
 5. **Admin chef endpoints** — verify `/admin/chefs/*` in `admin.py` is fully wired and test in admin panel
 
 ---
+
+---
+
+## 16. Frontend Design System
+
+CSS variables defined in `frontend/src/app/globals.css`. Always use these tokens when writing new UI.
+
+### Brand Palette
+| Variable | Value | Use |
+|----------|-------|-----|
+| `--claude-orange` | `#DA7756` | Primary accent / CTA |
+| `--claude-orange-hover` | `#C96844` | Hover state |
+| `--claude-orange-light` | `#E8956D` | Light accent |
+| `--claude-cream` | `#F5EFE6` | Warm text / backgrounds |
+| `--claude-sand` | `#D4B896` | Secondary text |
+| `--claude-sand-light` | `#EDE3D5` | Subtle borders |
+| `--claude-brown-deep` | `#1A1410` | Deep background |
+| `--claude-brown-mid` | `#2C231B` | Mid background |
+
+### Dark Theme (default)
+| Variable | Value |
+|----------|-------|
+| `--bg` | `#13110E` |
+| `--bg-surface` | `#231E18` |
+| `--text-primary` | `#F5EFE6` |
+| `--text-secondary` | `#BCA98D` |
+| `--success` | `#5CB87E` |
+| `--warning` | `#E8B84B` |
+| `--error` | `#E06B6B` |
+
+### Light Theme
+| Variable | Value |
+|----------|-------|
+| `--bg` | `#FAF7F3` |
+| `--bg-surface` | `#FFFFFF` |
+| `--text-primary` | `#1E1409` |
+| `--text-secondary` | `#5C4430` |
+| `--success` | `#3A9E5F` |
+| `--warning` | `#C9900E` |
+| `--error` | `#C0392B` |
+
+### Spacing / Radii / Transitions
+| Variable | Value |
+|----------|-------|
+| `--radius-sm` | `8px` |
+| `--radius-md` | `12px` |
+| `--radius-lg` | `16px` |
+| `--radius-xl` | `20px` |
+| `--radius-pill` | `999px` |
+| `--transition` | `0.2s cubic-bezier(.4,0,.2,1)` |
+| `--transition-slow` | `0.35s cubic-bezier(.4,0,.2,1)` |
+
+### Typography
+- **Fonts:** DM Sans (300–700), DM Mono (400–500), Playfair Display (700–900) — loaded via `next/font/google`
+- **App title:** "Chefsy — Your AI Kitchen Companion" (in `app/layout.tsx` metadata)
+- **Theme color:** `#DA7756`
+
+### Theme Toggle
+- Reads/writes `localStorage` key `gharka_theme` (`"dark"` | `"light"`)
+- Default: dark
+- Bootstrap script in `app/layout.tsx` applies `data-theme` attribute before first paint
+
+---
+
+## 17. Context Providers
+
+Both providers are mounted in `app/layout.tsx` and wrap the entire app.
+
+### `SearchContext` (`src/context/SearchContext.tsx`)
+Manages the AI chat + recipe search state.
+
+| Item | Detail |
+|------|--------|
+| State | `message`, `loading`, `chatId`, `messages[]`, `data` (recipe JSON), `error`, `selectedProvider` |
+| Methods | `sendMessage()`, `loadChat()`, `createChatSession()`, `fetchChats()` |
+| API calls | `POST /chat`, `GET /chats`, `GET /chat/:id`, `POST /chat_sessions` |
+| localStorage keys | `gharka_token` (Bearer token), `gharka_user_name`, `gharka_user_email` |
+
+### `VideoContext` (`src/context/VideoContext.tsx`)
+Manages video playback state across the page.
+
+| Item | Detail |
+|------|--------|
+| State | `playingId` (currently playing video ID), `playlist[]` |
+| Use | Video components read `playingId` to pause others when a new one plays |
+
+---
+
+## 18. Backend Service Layer Map
+
+### `backend/app/services/` — Stateless helpers (called directly by routers)
+
+| File | Key Functions | Purpose |
+|------|---------------|---------|
+| `recipe_persistence.py` | `save_generated_recipe()`, `get_recipe_by_id()` | INSERT/UPDATE recipe + ingredients in DB |
+| `cache_service.py` | `get_cached_recipe()` | Redis + DB two-level cache lookup |
+| `search_service.py` | (search functions) | Fuzzy + trigram search over `recipe_master` |
+| `ingredient_service.py` | upsert functions | Ingredient lookup, normalise, persist |
+| `image_generator.py` | `generate_ingredient_image()`, `generate_recipe_image()` | OpenAI gpt-image-1 image generation |
+| `streaming_service.py` | SSE helpers | Chunk formatting for Server-Sent Events |
+| `ingredient_emojis.py` | emoji dict | Maps ingredient name → emoji (mirrors frontend `ingredientEmojis.ts`) |
+
+### `backend/app/application/` — Orchestration layer (high-level workflows)
+
+| File | Key Class / Functions | Purpose |
+|------|-----------------------|---------|
+| `recipe_service.py` | `generate_recipe()` | Full LLM pipeline: cache → vector → LLM → validate → save |
+| `recipe_retriever.py` | `RecipeRetriever` | Semantic vector similarity search (threshold: 0.85) |
+| `chat_service.py` | `create_chat()`, `add_message()`, `get_chat_messages()` | Chat session management |
+| `chat_block_service.py` | `add_block()`, `get_blocks_for_chat()`, `append_text_to_block()` | Content block CRUD |
+| `stream_finalizer.py` | `finalize_stream()` | Finalises SSE streaming responses |
+
+### `backend/app/infrastructure/vector/` — Vector search infrastructure
+
+| File | Purpose |
+|------|---------|
+| `vector_client.py` | Vector DB client wrapper |
+| `embedding_service.py` | Generates text embeddings for recipe titles |
+
+### `backend/app/domain/` — Domain models & pure logic
+
+| File | Key Items | Purpose |
+|------|-----------|---------|
+| `recipe.py` | `Recipe` (Pydantic model) | Canonical recipe schema |
+| `ingredient.py` | `normalize_ingredient_name()`, `normalize_ingredient_alias_key()` | Ingredient name normalisation |
+| `nutrition.py` | `aggregate_nutrition()` | Aggregate nutrition across ingredients |
 
 *This document is maintained in `gharka-chef/Claude_assistance/claude_project_summary.md`*
 *Always read this before starting any development session on Gharka Chef.*

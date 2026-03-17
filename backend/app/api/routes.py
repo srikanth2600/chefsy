@@ -1157,7 +1157,7 @@ def get_recipe_reactions(recipe_key: str, request: Request):
             cur.execute("SELECT id FROM recipe_master WHERE recipe_key = %s", (recipe_key,))
             r = cur.fetchone()
             if not r:
-                raise HTTPException(status_code=404, detail="Recipe not found")
+                return {"likes": 0, "dislikes": 0, "user_reaction": None}
             recipe_id = r["id"]
             cur.execute("SELECT likes, dislikes FROM recipe_reaction_count WHERE recipe_id = %s", (recipe_id,))
             row = cur.fetchone() or {"likes": 0, "dislikes": 0}

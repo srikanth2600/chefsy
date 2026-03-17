@@ -349,3 +349,73 @@ def run_startup_migrations() -> None:
             conn.commit()
     except OperationalError:
         logger.exception("Database not ready for startup migrations")
+
+    # Meal plan tables
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS meal_plan (
+                      id               SERIAL PRIMARY KEY,
+                      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                      name             TEXT NOT NULL DEFAULT 'My Meal Plan',
+                      description      TEXT,
+                      week_start_date  DATE,
+                      servings         INTEGER NOT NULL DEFAULT 2,
+                      preferences_json JSONB,
+                      status           TEXT NOT NULL DEFAULT 'active'
+                                         CHECK (status IN ('active','archived')),
+                      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_plan_user_id    ON meal_plan(user_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_plan_status     ON meal_plan(status)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_plan_week_start ON meal_plan(week_start_date)")
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS meal_plan_slot (
+                      id           SERIAL PRIMARY KEY,
+                      meal_plan_id INTEGER NOT NULL REFERENCES meal_plan(id) ON DELETE CASCADE,
+                      day_index    SMALLINT NOT NULL CHECK (day_index BETWEEN 0 AND 6),
+                      meal_type    TEXT NOT NULL CHECK (meal_type IN ('breakfast','lunch','dinner','snack')),
+                      recipe_id    INTEGER REFERENCES recipe_master(id) ON DELETE SET NULL,
+                      meal_name    TEXT,
+                      meal_json    JSONB,
+                      sort_order   SMALLINT NOT NULL DEFAULT 0,
+                      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (meal_plan_id, day_index, meal_type)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_plan_slot_plan_id ON meal_plan_slot(meal_plan_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_meal_plan_slot_recipe  ON meal_plan_slot(recipe_id)")
+                conn.commit()
+                logger.info("Ensured meal_plan and meal_plan_slot tables exist")
+    except Exception:
+        logger.exception("Failed to create meal_plan tables (continuing)")
+
+    # Migrate chat_content_block CHECK constraint to allow 'meal_plan' block type
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT conname, pg_get_constraintdef(oid) AS condef
+                    FROM pg_constraint
+                    WHERE conrelid = 'chat_content_block'::regclass AND contype = 'c'
+                    """
+                )
+                rows = cur.fetchall()
+                for row in rows:
+                    if "block_type" in (row.get("condef") or "") and "meal_plan" not in (row.get("condef") or ""):
+                        conname = row["conname"]
+                        cur.execute(f"ALTER TABLE chat_content_block DROP CONSTRAINT {conname}")
+                        cur.execute(
+                            "ALTER TABLE chat_content_block ADD CONSTRAINT chat_content_block_block_type_check "
+                            "CHECK (block_type IN ('text','recipe','video','ad','cta','meal_plan'))"
+                        )
+                        conn.commit()
+                        logger.info("Migrated chat_content_block block_type CHECK to include 'meal_plan'")
+                        break
+    except Exception:
+        logger.exception("Failed to migrate chat_content_block block_type constraint (continuing)")

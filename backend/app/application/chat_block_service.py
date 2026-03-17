@@ -10,7 +10,7 @@ from app.core.db import get_connection
 from app.core.config import settings
 import redis
 
-ALLOWED_BLOCK_TYPES = frozenset({"text", "recipe", "video", "ad", "cta"})
+ALLOWED_BLOCK_TYPES = frozenset({"text", "recipe", "video", "ad", "cta", "meal_plan"})
 
 
 def add_block(
