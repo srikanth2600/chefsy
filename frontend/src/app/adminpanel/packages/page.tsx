@@ -23,6 +23,18 @@ type FeatureLimit = {
   limit_value: number | null;
 };
 
+type LLMModel = {
+  id: number;
+  name: string;
+  provider: string;
+  model_id: string;
+  is_active: boolean;
+  is_default: boolean;
+  enabled: boolean;
+  is_pkg_default: boolean;
+  features: string[];
+};
+
 type Package = {
   id: number;
   name: string;
@@ -63,6 +75,17 @@ const FEATURES: { key: 'ai_recipe' | 'meal_plan' | 'ai_video'; label: string; ic
   { key: 'ai_recipe',  label: 'AI Recipes',    icon: '🍳', color: '#f97316', desc: 'AI-generated recipe creation' },
   { key: 'meal_plan',  label: 'Meal Planning',  icon: '🥗', color: '#4ade80', desc: 'Weekly meal plan generation' },
   { key: 'ai_video',   label: 'AI Videos',      icon: '🎬', color: '#a78bfa', desc: 'AI cooking video generation' },
+];
+
+const PROVIDER_COLORS: Record<string, string> = {
+  openai: '#10a37f', groq: '#f55036', ollama: '#7c3aed', custom: '#60a5fa',
+};
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: 'OpenAI', groq: 'Groq', ollama: 'Ollama', custom: 'Custom',
+};
+const LLM_FEATURE_OPTIONS = [
+  { key: 'ai_recipe', label: 'AI Recipe', icon: '🍳' },
+  { key: 'meal_plan', label: 'Meal Plan', icon: '🥗' },
 ];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -133,6 +156,11 @@ export default function PackagesPage() {
   const [editingLimits,  setEditingLimits]  = useState(false);
   const [limitsForm,     setLimitsForm]     = useState<LimitsFormType>({});
   const [savingLimits,   setSavingLimits]   = useState(false);
+
+  // LLM access tab
+  const [activeTab,   setActiveTab]   = useState<'limits' | 'llm'>('limits');
+  const [llmModels,   setLlmModels]   = useState<LLMModel[]>([]);
+  const [llmLoading,  setLlmLoading]  = useState(false);
 
   const load = useCallback(async (keepSelected?: Package) => {
     setLoading(true); setError(null);
@@ -255,6 +283,44 @@ export default function PackagesPage() {
     finally { setSavingLimits(false); }
   };
 
+  // ── LLM Access ─────────────────────────────────────────────────────────
+
+  const loadLLMAccess = useCallback(async (pkg: Package) => {
+    setLlmLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/packages/${pkg.id}/llm-access`, { headers: hdr() as HeadersInit });
+      if (res.ok) {
+        const data = await res.json();
+        setLlmModels(data.models ?? []);
+      }
+    } catch {} finally { setLlmLoading(false); }
+  }, []);
+
+  const toggleLLMAccess = async (pkg: Package, model: LLMModel, enabled: boolean, isDefault: boolean, features?: string[]) => {
+    await fetch(`${API}/admin/packages/${pkg.id}/llm-access`, {
+      method: 'PUT', headers: hdr() as HeadersInit,
+      body: JSON.stringify({
+        llm_model_id: model.id,
+        enabled,
+        is_default: isDefault,
+        features: features ?? model.features ?? ['ai_recipe', 'meal_plan'],
+      }),
+    });
+    await loadLLMAccess(pkg);
+  };
+
+  const toggleLLMFeature = async (pkg: Package, model: LLMModel, feature: string, checked: boolean) => {
+    const current = model.features ?? ['ai_recipe', 'meal_plan'];
+    const next = checked ? [...new Set([...current, feature])] : current.filter(f => f !== feature);
+    await toggleLLMAccess(pkg, model, true, model.is_pkg_default, next);
+  };
+
+  // When tab switches to LLM and a package is selected, load models
+  useEffect(() => {
+    if (activeTab === 'llm' && selected) loadLLMAccess(selected);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, selected?.id]);
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   return (
@@ -293,7 +359,7 @@ export default function PackagesPage() {
             {packages.map(pkg => (
               <div
                 key={pkg.id}
-                onClick={() => { setSelected(pkg); setEditingLimits(false); setShowForm(false); }}
+                onClick={() => { setSelected(pkg); setEditingLimits(false); setShowForm(false); setActiveTab('limits'); }}
                 style={{
                   background: selected?.id === pkg.id ? 'var(--bg-surface)' : 'var(--bg)',
                   border: `1px solid ${selected?.id === pkg.id ? 'var(--claude-orange)' : 'var(--border, rgba(255,255,255,0.08))'}`,
@@ -443,9 +509,31 @@ export default function PackagesPage() {
               </div>
             )}
 
-            {/* Feature limits panel */}
+            {/* Package detail panel */}
             {selected && !showForm && (
               <div style={{ background: 'var(--bg-surface)', borderRadius: 12, border: '1px solid var(--border, rgba(255,255,255,0.08))', overflow: 'hidden' }}>
+
+                {/* Tab bar */}
+                <div style={{ display: 'flex', borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))' }}>
+                  {(['limits', 'llm'] as const).map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      style={{
+                        flex: 1, padding: '12px 0', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer',
+                        background: activeTab === tab ? 'var(--bg-surface)' : 'transparent',
+                        color: activeTab === tab ? 'var(--claude-orange)' : 'var(--text-secondary)',
+                        borderBottom: activeTab === tab ? '2px solid var(--claude-orange)' : '2px solid transparent',
+                      }}
+                    >
+                      {tab === 'limits' ? '⚙ Feature Limits' : '🤖 LLM Access'}
+                    </button>
+                  ))}
+                </div>
+
+                {/* ── Feature Limits tab ── */}
+                {activeTab === 'limits' && (
+                <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))' }}>
                   <div>
                     <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
@@ -580,6 +668,106 @@ export default function PackagesPage() {
                     <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
                       <span style={{ color: '#60a5fa', fontWeight: 600 }}>N</span> = N uses per day or month
                     </span>
+                  </div>
+                )}
+                </div>
+                )}
+
+                {/* ── LLM Access tab ── */}
+                {activeTab === 'llm' && (
+                  <div>
+                    <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border, rgba(255,255,255,0.08))' }}>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {selected.display_name} — LLM Access
+                      </span>
+                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
+                        Enable AI models for this package and select which features each model powers.
+                      </div>
+                    </div>
+
+                    {llmLoading ? (
+                      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)', fontSize: 13 }}>Loading…</div>
+                    ) : llmModels.length === 0 ? (
+                      <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)', fontSize: 13 }}>
+                        No LLM models found. <a href="/adminpanel/llm-models" style={{ color: 'var(--claude-orange)' }}>Create one first →</a>
+                      </div>
+                    ) : (
+                      <div>
+                        {llmModels.map(m => (
+                          <div key={m.id} style={{ padding: '14px 20px', borderBottom: '1px solid var(--border, rgba(255,255,255,0.05))' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                              <span style={{ fontSize: 10, fontWeight: 700, borderRadius: 6, padding: '2px 8px', background: PROVIDER_COLORS[m.provider] + '22', color: PROVIDER_COLORS[m.provider], flexShrink: 0 }}>
+                                {PROVIDER_LABELS[m.provider] ?? m.provider}
+                              </span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  {m.name}
+                                  {m.is_default && <span style={{ fontSize: 10, background: 'rgba(218,119,86,0.15)', color: 'var(--claude-orange)', borderRadius: 5, padding: '1px 6px' }}>Global Default</span>}
+                                  {!m.is_active && <span style={{ fontSize: 10, background: 'rgba(255,255,255,0.06)', color: 'var(--text-secondary)', borderRadius: 5, padding: '1px 6px' }}>Inactive</span>}
+                                </div>
+                                <div style={{ fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{m.model_id}</div>
+                              </div>
+
+                              {/* Set as default for package */}
+                              {m.enabled && (
+                                <button
+                                  onClick={() => toggleLLMAccess(selected, m, true, !m.is_pkg_default)}
+                                  style={{
+                                    padding: '4px 10px', fontSize: 11, borderRadius: 6, border: '1px solid', cursor: 'pointer', fontWeight: 600, flexShrink: 0,
+                                    background: m.is_pkg_default ? 'rgba(218,119,86,0.15)' : 'transparent',
+                                    borderColor: m.is_pkg_default ? 'rgba(218,119,86,0.4)' : 'var(--border, rgba(255,255,255,0.1))',
+                                    color: m.is_pkg_default ? 'var(--claude-orange)' : 'var(--text-secondary)',
+                                  }}
+                                >
+                                  {m.is_pkg_default ? '★ Default' : '☆ Default'}
+                                </button>
+                              )}
+
+                              {/* Enable/disable toggle */}
+                              <div
+                                onClick={() => toggleLLMAccess(selected, m, !m.enabled, m.is_pkg_default && !m.enabled ? false : m.is_pkg_default)}
+                                style={{
+                                  width: 36, height: 20, borderRadius: 10, cursor: 'pointer', position: 'relative', transition: 'background 0.2s', flexShrink: 0,
+                                  background: m.enabled ? 'var(--claude-orange)' : 'rgba(255,255,255,0.12)',
+                                }}
+                                title={m.enabled ? 'Disable for this package' : 'Enable for this package'}
+                              >
+                                <div style={{
+                                  position: 'absolute', top: 2, left: m.enabled ? 18 : 2, width: 16, height: 16, borderRadius: '50%',
+                                  background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                                }} />
+                              </div>
+                            </div>
+
+                            {/* Feature checkboxes — only when model is enabled */}
+                            {m.enabled && (
+                              <div style={{ display: 'flex', gap: 16, marginTop: 10, paddingLeft: 4 }}>
+                                <span style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 1 }}>Enable for:</span>
+                                {LLM_FEATURE_OPTIONS.map(f => {
+                                  const active = (m.features ?? ['ai_recipe', 'meal_plan']).includes(f.key);
+                                  return (
+                                    <label key={f.key} style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer', fontSize: 12 }}>
+                                      <input
+                                        type="checkbox"
+                                        checked={active}
+                                        onChange={e => toggleLLMFeature(selected, m, f.key, e.target.checked)}
+                                        style={{ width: 13, height: 13, accentColor: 'var(--claude-orange)' }}
+                                      />
+                                      <span style={{ color: active ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
+                                        {f.icon} {f.label}
+                                      </span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                        <div style={{ padding: '10px 20px', borderTop: '1px solid var(--border, rgba(255,255,255,0.06))', fontSize: 12, color: 'var(--text-secondary)' }}>
+                          ℹ️ If multiple LLMs are enabled for a feature, users on this package will see a model dropdown in the chat.
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

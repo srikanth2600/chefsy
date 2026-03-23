@@ -23,6 +23,9 @@ class MealPlanGenerateRequest(BaseModel):
     servings: int = 2
     cuisine_preference: Optional[str] = None
     meal_types: list[str] = ["breakfast", "lunch", "dinner"]
+    extra_context: Optional[str] = None
+    body_lifestyle: Optional[dict] = None
+    llm_provider: Optional[str] = None  # provider_id from /providers endpoint e.g. "groq:llama-3.1-8b-instant"
 
 
 class SlotUpdate(BaseModel):

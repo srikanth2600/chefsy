@@ -1,3 +1,4 @@
+import base64
 import re
 from typing import Any
 
@@ -64,29 +65,95 @@ def _is_significant_match(query: str, recipe: dict) -> bool:
 
 
 @router.get("/providers")
-def list_providers() -> dict[str, Any]:
+def list_providers(http_request: Request, feature: str | None = None) -> dict[str, Any]:
     """
-    Return available provider modules and any provider-specific metadata (e.g., ollama models).
+    Return available LLM providers for the requesting user.
+    Optional ?feature=ai_recipe|meal_plan filters by which features the LLM is enabled for.
+    If the user's package has specific LLMs configured in package_llm_access, return those.
+    Otherwise fall back to all active llm_models, otherwise fall back to settings-based list.
     """
+    user_id = _get_user_from_request(http_request)
+
+    # Try DB-backed LLM model list
+    try:
+        from app.core.db import get_connection as _gc
+        from app.core.packages import get_user_plan as _gup
+
+        if user_id:
+            plan_name = _gup(user_id)
+            with _gc() as conn:
+                with conn.cursor() as cur:
+                    # Get package id
+                    cur.execute("SELECT id FROM subscription_package WHERE name = %s", (plan_name,))
+                    pkg_row = cur.fetchone()
+                    if pkg_row:
+                        if feature:
+                            cur.execute(
+                                """SELECT lm.id, lm.name, lm.provider, lm.model_id, lm.base_url, pla.is_default
+                                   FROM package_llm_access pla
+                                   JOIN llm_model lm ON lm.id = pla.llm_model_id
+                                   WHERE pla.package_id = %s AND lm.is_active = TRUE
+                                     AND pla.features @> %s::jsonb
+                                   ORDER BY pla.is_default DESC, lm.name ASC""",
+                                (pkg_row["id"], f'["{feature}"]'),
+                            )
+                        else:
+                            cur.execute(
+                                """SELECT lm.id, lm.name, lm.provider, lm.model_id, lm.base_url, pla.is_default
+                                   FROM package_llm_access pla
+                                   JOIN llm_model lm ON lm.id = pla.llm_model_id
+                                   WHERE pla.package_id = %s AND lm.is_active = TRUE
+                                   ORDER BY pla.is_default DESC, lm.name ASC""",
+                                (pkg_row["id"],),
+                            )
+                        pkg_rows = cur.fetchall()
+                        if pkg_rows:
+                            providers = []
+                            default_id = None
+                            for r in pkg_rows:
+                                pid = _build_provider_id(r["provider"], r["model_id"], r["base_url"])
+                                providers.append({"id": pid, "label": r["name"]})
+                                if r["is_default"] and default_id is None:
+                                    default_id = pid
+                            if not default_id and providers:
+                                default_id = providers[0]["id"]
+                            return {"providers": providers, "default": default_id}
+
+        # No package-specific config: return all active llm_models
+        with _gc() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name, provider, model_id, base_url, is_default FROM llm_model WHERE is_active = TRUE ORDER BY is_default DESC, name ASC"
+                )
+                rows = cur.fetchall()
+        if rows:
+            providers = []
+            default_id = None
+            for r in rows:
+                pid = _build_provider_id(r["provider"], r["model_id"], r["base_url"])
+                providers.append({"id": pid, "label": r["name"]})
+                if r["is_default"] and default_id is None:
+                    default_id = pid
+            if not default_id and providers:
+                default_id = providers[0]["id"]
+            return {"providers": providers, "default": default_id}
+    except Exception:
+        logger.exception("Failed to load providers from DB, falling back to settings")
+
+    # Fallback: settings-based provider list (original behavior)
     providers: list[dict[str, str]] = []
-    # OpenAI / GPT entry (use friendly label)
     providers.append({"id": "openai", "label": settings.openai_model})
-    # Groq (OpenAI-compatible) models
     for m in getattr(settings, "groq_models", []):
         providers.append({"id": f"groq:{m}", "label": m})
-    # Include any configured ollama models as separate selectable providers
     for m in getattr(settings, "ollama_models", []):
         providers.append({"id": f"ollama:{m}", "label": m})
-    # Determine default provider id. Prefer default_ollama_model when default_llm_provider is "ollama".
     default_id = None
     if getattr(settings, "default_llm_provider", "") == "ollama" and getattr(settings, "default_ollama_model", None):
         default_id = f"ollama:{settings.default_ollama_model}"
     if getattr(settings, "default_llm_provider", "") == "groq" and getattr(settings, "groq_model", None):
         default_id = f"groq:{settings.groq_model}"
     if not default_id:
-        default = settings.default_llm_provider
-        default_id = default
-    # Fallback to first provider if default_id still unset
+        default_id = settings.default_llm_provider
     if not default_id and providers:
         default_id = providers[0]["id"]
     return {
@@ -120,6 +187,18 @@ QUERY_NORMALIZE_MAP = {
     "pulav": "pulao",
     "pulao": "pulao",
 }
+
+
+def _build_provider_id(provider: str, model_id: str, base_url: str | None) -> str:
+    """Build the provider ID string used by the frontend/chat module param."""
+    if provider == "ollama":
+        return f"ollama:{model_id}"
+    if provider == "groq":
+        return f"groq:{model_id}"
+    if provider == "openai":
+        return "openai"
+    # custom: use model_id directly
+    return model_id
 
 
 def sanitize_user_query(raw: str) -> str:
@@ -531,6 +610,101 @@ def get_chat(chat_id: int, http_request: Request):
     return {"chat_id": chat_id, "messages": messages}
 
 
+_MEAL_PLAN_INTENT_RE = re.compile(
+    r'\b(meal\s+plan|weekly\s+plan|7[\s-]?day\s+plan|plan\s+my\s+meals?|'
+    r'create\s+(a\s+)?meal\s+plan|generate\s+(a\s+)?meal\s+plan|plan\s+my\s+week|'
+    r'week(ly)?\s+meal\s+plan|food\s+plan|diet\s+plan|nutrition\s+plan|'
+    r'plan\s+my\s+diet|plan\s+my\s+food)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_meal_plan_intent(message: str) -> bool:
+    return bool(_MEAL_PLAN_INTENT_RE.search(message))
+
+
+def _handle_meal_plan_intent(chat_id: int, user_id: int, message: str) -> JSONResponse:
+    """
+    Generate a meal plan and return a chat response with a meal_plan block.
+    Falls back to an upgrade CTA if the user is not on a Premium plan.
+    """
+    from app.meal_plan import service as _mp_service
+
+    # Premium check
+    try:
+        _mp_service.check_premium(user_id)
+    except HTTPException:
+        # Not premium — return upgrade prompt
+        try:
+            mid = add_message(chat_id, "assistant", content=None)
+            if mid:
+                add_block(mid, "text", {
+                    "text": "Meal planning is a **Premium feature**. Upgrade your plan to generate personalised 7-day meal plans with shopping lists and calorie summaries! 🍽️"
+                }, 1)
+                add_block(mid, "cta", {"label": "Upgrade to Premium →", "url": "/upgrade"}, 2)
+        except Exception:
+            logger.exception("[CHAT] failed to insert upgrade blocks for chat_id=%s", chat_id)
+        return JSONResponse(content={"chat_id": chat_id, "messages": _messages_with_blocks(chat_id)})
+
+    # Generate plan
+    try:
+        plan_data = _mp_service.generate_meal_plan(user_id, {
+            "name": "AI Meal Plan",
+            "extra_context": message,
+            "servings": 2,
+            "meal_types": ["breakfast", "lunch", "dinner"],
+        })
+        plan_info = plan_data["plan"]
+        slots = plan_data["slots"]
+        plan_id_numeric = plan_info["id"]
+
+        slot_counts = [0] * 7
+        meal_types_ordered: list[str] = []
+        for s in slots:
+            slot_counts[s["day_index"]] += 1
+            mt = s.get("meal_type", "")
+            if mt and mt not in meal_types_ordered:
+                meal_types_ordered.append(mt)
+
+        # Encode plan ID the same way the frontend does: btoa('chefsy:{id}')
+        encoded_id = base64.b64encode(f"chefsy:{plan_id_numeric}".encode()).decode().rstrip("=")
+
+        block_content = {
+            "plan_id": encoded_id,
+            "plan_name": plan_info.get("name", "AI Meal Plan"),
+            "summary": {
+                "total_slots": len(slots),
+                "slot_counts_by_day": slot_counts,
+                "meal_types": meal_types_ordered or ["breakfast", "lunch", "dinner"],
+            },
+        }
+
+        mid = add_message(chat_id, "assistant", content=None)
+        if mid is not None:
+            plan_name = plan_info.get("name", "AI Meal Plan")
+            add_block(mid, "text", {
+                "text": (
+                    f"I've created your 7-day meal plan **{plan_name}**! 🍽️ "
+                    "Tap **View Full Plan** to see the full schedule, swap meals, "
+                    "and download your shopping list."
+                )
+            }, 1)
+            add_block(mid, "meal_plan", block_content, 2)
+
+    except Exception:
+        logger.exception("[CHAT] meal plan generation failed for chat_id=%s user_id=%s", chat_id, user_id)
+        try:
+            mid = add_message(chat_id, "assistant", content=None)
+            if mid:
+                add_block(mid, "text", {
+                    "text": "Sorry, I couldn't generate a meal plan right now. Please try again in a moment."
+                }, 1)
+        except Exception:
+            pass
+
+    return JSONResponse(content={"chat_id": chat_id, "messages": _messages_with_blocks(chat_id)})
+
+
 @router.post("/chat")
 def chat(request: ChatRequest, http_request: Request, module: str | None = None) -> dict:
     try:
@@ -581,6 +755,11 @@ def _chat_impl(request: ChatRequest, http_request: Request, module: str | None =
         logger.exception("[CHAT] add_message(user) failed: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to save message") from exc
 
+    # ── Meal plan intent detection ─────────────────────────────────────────
+    if _is_meal_plan_intent(raw_message):
+        logger.info("[CHAT] meal plan intent detected for chat_id=%s user_id=%s", chat_id, user_id)
+        return _handle_meal_plan_intent(chat_id, user_id, raw_message)
+
     # Orchestrate via service layer (no direct SQL/cursor usage here)
     try:
         # Try cache first (inserts search log internally)
@@ -612,6 +791,31 @@ def _chat_impl(request: ChatRequest, http_request: Request, module: str | None =
                         logger.exception("[CHAT] failed to build cached response from found recipe")
         except Exception:
             logger.exception("[CHAT] search_service lookup failed")
+
+        # Auto-select LLM from user's package if no module specified
+        if not module:
+            try:
+                from app.core.packages import get_user_plan as _gup
+                plan_name = _gup(user_id)
+                with get_connection() as _conn:
+                    with _conn.cursor() as _cur:
+                        _cur.execute("SELECT id FROM subscription_package WHERE name = %s", (plan_name,))
+                        _pkg = _cur.fetchone()
+                        if _pkg:
+                            _cur.execute(
+                                """SELECT lm.provider, lm.model_id, lm.base_url
+                                   FROM package_llm_access pla
+                                   JOIN llm_model lm ON lm.id = pla.llm_model_id
+                                   WHERE pla.package_id = %s AND lm.is_active = TRUE AND pla.is_default = TRUE
+                                   LIMIT 1""",
+                                (_pkg["id"],),
+                            )
+                            _lm = _cur.fetchone()
+                            if _lm:
+                                module = _build_provider_id(_lm["provider"], _lm["model_id"], _lm["base_url"])
+                                logger.info("[CHAT] auto-selected module=%s from package=%s", module, plan_name)
+            except Exception:
+                logger.exception("[CHAT] failed to auto-select LLM from package")
 
         logger.info("[CHAT] cache MISS recipe_key=%s calling generate_recipe(module=%s)", recipe_key, module)
         # For Ollama providers, use streaming to engage the user.

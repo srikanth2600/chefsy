@@ -181,8 +181,15 @@ export default function Home() {
     return shuffled.slice(0, 2);
   }, [recentRecipes]);
 
+  useEffect(()=>{
+    try {
+      const q = new URLSearchParams(window.location.search).get('q');
+      if (q) setMessage(decodeURIComponent(q));
+    } catch {}
+  }, []);
+
   useEffect(()=>{fetch(`${apiBase}/recipes/recent?limit=20`).then(r=>r.ok?r.json():null).then(j=>setRecentRecipes(Array.isArray(j?.recipes)?j.recipes:[])).catch(()=>{});},[apiBase]);
-  useEffect(()=>{fetch(`${apiBase}/providers`).then(r=>r.ok?r.json():null).then(j=>{if(Array.isArray(j?.providers)){setProviders(j.providers);setSelectedProvider(j.default||j.providers[0]?.id||null);}}).catch(()=>{});},[apiBase]);
+  useEffect(()=>{fetch(`${apiBase}/providers?feature=ai_recipe`).then(r=>r.ok?r.json():null).then(j=>{if(Array.isArray(j?.providers)){setProviders(j.providers);setSelectedProvider(j.default||j.providers[0]?.id||null);}}).catch(()=>{});},[apiBase]);
 
   const fetchChats = async () => {
     const t=getToken(); if(!t)return;

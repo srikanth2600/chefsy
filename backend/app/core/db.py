@@ -539,3 +539,90 @@ def run_startup_migrations() -> None:
                     logger.info("Seeded subscription_package and package_feature_limit tables")
     except Exception:
         logger.exception("Failed to create subscription_package tables (continuing)")
+
+    # LLM model management tables
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS llm_model (
+                        id          SERIAL PRIMARY KEY,
+                        name        TEXT NOT NULL,
+                        provider    TEXT NOT NULL,
+                        model_id    TEXT NOT NULL,
+                        api_key     TEXT,
+                        base_url    TEXT,
+                        is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+                        is_default  BOOLEAN NOT NULL DEFAULT FALSE,
+                        notes       TEXT,
+                        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS package_llm_access (
+                        id            SERIAL PRIMARY KEY,
+                        package_id    INTEGER NOT NULL REFERENCES subscription_package(id) ON DELETE CASCADE,
+                        llm_model_id  INTEGER NOT NULL REFERENCES llm_model(id) ON DELETE CASCADE,
+                        is_default    BOOLEAN NOT NULL DEFAULT FALSE,
+                        UNIQUE (package_id, llm_model_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pkg_llm_pkg    ON package_llm_access(package_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pkg_llm_model  ON package_llm_access(llm_model_id)")
+                # Add features column if it doesn't exist (migration for existing installs)
+                cur.execute("""
+                    ALTER TABLE package_llm_access
+                    ADD COLUMN IF NOT EXISTS features JSONB NOT NULL DEFAULT '["ai_recipe","meal_plan"]'
+                """)
+                conn.commit()
+                logger.info("Ensured llm_model and package_llm_access tables exist")
+    except Exception:
+        logger.exception("Failed to create llm_model tables (continuing)")
+
+    # Seed default LLM models from config if table is empty
+    try:
+        from app.core.config import settings as _settings
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS cnt FROM llm_model")
+                cnt = cur.fetchone()["cnt"]
+                if cnt == 0:
+                    seeds = []
+                    # Groq models
+                    for m in (_settings.groq_models or []):
+                        seeds.append({
+                            "name": m, "provider": "groq", "model_id": m,
+                            "api_key": _settings.groq_api_key or "",
+                            "base_url": _settings.groq_base_url,
+                            "is_default": m == _settings.groq_model,
+                        })
+                    # OpenAI
+                    if _settings.openai_api_key:
+                        seeds.append({
+                            "name": _settings.openai_model, "provider": "openai",
+                            "model_id": _settings.openai_model,
+                            "api_key": _settings.openai_api_key, "base_url": None,
+                            "is_default": _settings.default_llm_provider == "openai",
+                        })
+                    # Ollama models
+                    for m in (_settings.ollama_models or []):
+                        seeds.append({
+                            "name": m, "provider": "ollama", "model_id": m,
+                            "api_key": None,
+                            "base_url": _settings.ollama_http_url or "http://localhost:11434",
+                            "is_default": m == _settings.default_ollama_model and _settings.default_llm_provider == "ollama",
+                        })
+                    # Ensure only one is_default=True
+                    has_default = any(s["is_default"] for s in seeds)
+                    if not has_default and seeds:
+                        seeds[0]["is_default"] = True
+                    for s in seeds:
+                        cur.execute(
+                            "INSERT INTO llm_model (name, provider, model_id, api_key, base_url, is_active, is_default) VALUES (%s,%s,%s,%s,%s,TRUE,%s)",
+                            (s["name"], s["provider"], s["model_id"], s["api_key"], s["base_url"], s["is_default"])
+                        )
+                    conn.commit()
+                    logger.info("Seeded %d default LLM models", len(seeds))
+    except Exception:
+        logger.exception("Failed to seed default LLM models (continuing)")

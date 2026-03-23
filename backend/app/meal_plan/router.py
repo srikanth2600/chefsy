@@ -129,6 +129,24 @@ def create_plan(request: Request, body: MealPlanCreate):
 def generate_plan(request: Request, body: MealPlanGenerateRequest):
     user_id = _require_user(request)
     service.check_premium(user_id)
+
+    # Redis rate limit — prevent duplicate requests within 30 s
+    _redis_key = f"meal_plan:generate:{user_id}"
+    try:
+        import redis as _redis_mod
+        from app.core.config import settings as _settings
+        _rc = _redis_mod.from_url(_settings.redis_url, decode_responses=True)
+        if _rc.exists(_redis_key):
+            raise HTTPException(
+                status_code=429,
+                detail="Please wait a moment before generating another meal plan.",
+            )
+        _rc.setex(_redis_key, 30, "1")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Redis unavailable — proceed without rate limiting
+
     result = service.generate_meal_plan(user_id, body.model_dump())
     return result
 

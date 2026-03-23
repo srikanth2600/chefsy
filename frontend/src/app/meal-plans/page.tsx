@@ -250,7 +250,12 @@ export default function MealPlansPage() {
   const [bodyData, setBodyData]     = useState<BodyData>(defaultBodyData);
   // pendingForm: preferences set via modal, ready to be included in next generate
   const [pendingForm, setPendingForm] = useState<GenerateForm | null>(null);
+  const [multiWeekNotice, setMultiWeekNotice] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // LLM provider selection for meal planning
+  const [llmProviders, setLlmProviders]           = useState<{ id: string; label: string }[]>([]);
+  const [selectedLlmProvider, setSelectedLlmProvider] = useState<string | null>(null);
 
   const [form, setForm] = useState<GenerateForm>({
     name: '', dietary_preferences: [], allergies: [], servings: 2, cuisine_preference: '',
@@ -281,12 +286,31 @@ export default function MealPlansPage() {
 
   useEffect(() => { fetchPlans(); fetchUsage(); }, []);
 
+  // Fetch LLM providers enabled for meal_plan feature
+  useEffect(() => {
+    fetch(`${API}/providers?feature=meal_plan`, {
+      headers: tok() ? { Authorization: `Bearer ${tok()}` } : {},
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (j && Array.isArray(j.providers) && j.providers.length > 0) {
+          setLlmProviders(j.providers);
+          setSelectedLlmProvider(j.default ?? j.providers[0]?.id ?? null);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Detect multi-week keywords in prompt
+  const MULTI_WEEK_RE = /\b(2|two|3|three|4|four|fortnight|fortnightly|bi-?weekly)\s*(week|wk|weeks|wks)/i;
+
   // Open modal to set preferences (always opens modal)
   const openPrefsModal = () => {
     setUpgradeRequired(false);
+    // NOTE: plan name is kept independent from the search text (prompt)
     setForm(f => ({
       ...f,
-      name: pendingForm?.name || searchText.trim().slice(0, 60),
+      name: pendingForm?.name || '',          // do NOT pre-fill from searchText
       dietary_preferences: pendingForm?.dietary_preferences || [],
       allergies: pendingForm?.allergies || [],
       servings: pendingForm?.servings || 2,
@@ -314,6 +338,10 @@ export default function MealPlansPage() {
 
   // Core generate logic — accepts a form + uses current searchText + bodyData
   const handleGenerate = async (genForm: GenerateForm) => {
+    // Detect multi-week request and show notice, but proceed with 1-week plan
+    if (MULTI_WEEK_RE.test(searchText)) {
+      setMultiWeekNotice(true);
+    }
     setGenerating(true); setError('');
     try {
       const res = await fetch(`${API}/meal-plans/generate`, {
@@ -327,6 +355,7 @@ export default function MealPlansPage() {
           cuisine_preference: genForm.cuisine_preference || undefined,
           extra_context: searchText.trim() || undefined,
           body_lifestyle: (bodyData.weight || bodyData.goal || bodyData.activityLevel) ? bodyData : undefined,
+          llm_provider: selectedLlmProvider || undefined,
         }),
       });
       const json = await res.json();
@@ -396,6 +425,20 @@ export default function MealPlansPage() {
           )}
 
           {error && <div style={{ background: '#3a1a1a', border: '1px solid var(--error)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, color: 'var(--error)', fontSize: 12 }}>{error}</div>}
+
+          {/* Multi-week notice */}
+          {multiWeekNotice && (
+            <div style={{ background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.3)', borderRadius: 10, padding: '12px 14px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{ fontSize: 18, flexShrink: 0 }}>📅</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>1-Week Plan Generated</div>
+                <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                  Your request mentioned multiple weeks, but currently we support <strong>7-day (1-week) plans</strong> only. Your plan has been generated for a full week. You can create additional plans for subsequent weeks.
+                </div>
+              </div>
+              <button onClick={() => setMultiWeekNotice(false)} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}>✕</button>
+            </div>
+          )}
 
           {/* Filter chips */}
           {plans.length > 0 && (allPlanDietary.length > 0 || allPlanCuisine.length > 0) && (
@@ -577,6 +620,34 @@ export default function MealPlansPage() {
               </label>
 
               {error && <div style={{ color: 'var(--error, #E06B6B)', fontSize: 12 }}>{error}</div>}
+
+              {/* LLM selector — only shown when multiple models available */}
+              {llmProviders.length > 1 && (
+                <div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>🤖 AI Model</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {llmProviders.map(p => {
+                      const sel = selectedLlmProvider === p.id;
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setSelectedLlmProvider(p.id)}
+                          style={{
+                            padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer',
+                            fontWeight: sel ? 600 : 400,
+                            background: sel ? 'rgba(218,119,86,0.2)' : 'rgba(255,255,255,0.06)',
+                            color: sel ? 'var(--claude-orange)' : 'var(--text-secondary)',
+                            border: `1px solid ${sel ? 'rgba(218,119,86,0.5)' : 'rgba(255,255,255,0.1)'}`,
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Two action buttons */}
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>

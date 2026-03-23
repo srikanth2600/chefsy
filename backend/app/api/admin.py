@@ -1458,3 +1458,163 @@ def admin_get_package_limits(package_id: int, request: Request):
                        "limit_value": r["limit_value"]} for r in cur.fetchall()]
     return limits
 
+
+# ── LLM Model Management ──────────────────────────────────────────────────
+
+class LLMModelCreate(BaseModel):
+    name: str
+    provider: str  # openai, groq, ollama, custom
+    model_id: str
+    api_key: str | None = None
+    base_url: str | None = None
+    is_active: bool = True
+    is_default: bool = False
+    notes: str | None = None
+
+
+class LLMModelUpdate(BaseModel):
+    name: str | None = None
+    provider: str | None = None
+    model_id: str | None = None
+    api_key: str | None = None
+    base_url: str | None = None
+    is_active: bool | None = None
+    is_default: bool | None = None
+    notes: str | None = None
+
+
+@router.get("/llm-models")
+def list_llm_models(request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM llm_model ORDER BY is_default DESC, created_at ASC")
+            rows = [dict(r) for r in cur.fetchall()]
+    for r in rows:
+        r["created_at"] = str(r["created_at"])
+        r["updated_at"] = str(r["updated_at"])
+    return rows
+
+
+@router.post("/llm-models")
+def create_llm_model(body: LLMModelCreate, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if body.is_default:
+                cur.execute("UPDATE llm_model SET is_default = FALSE")
+            cur.execute(
+                """INSERT INTO llm_model (name, provider, model_id, api_key, base_url, is_active, is_default, notes)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+                (body.name, body.provider, body.model_id, body.api_key, body.base_url,
+                 body.is_active, body.is_default, body.notes),
+            )
+            new_id = cur.fetchone()["id"]
+            conn.commit()
+    return {"id": new_id, "status": "created"}
+
+
+@router.put("/llm-models/{model_id}")
+def update_llm_model(model_id: int, body: LLMModelUpdate, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if updates.get("is_default"):
+                cur.execute("UPDATE llm_model SET is_default = FALSE WHERE id != %s", (model_id,))
+            set_parts = ", ".join(f"{k} = %s" for k in updates)
+            set_values = list(updates.values())
+            cur.execute(
+                f"UPDATE llm_model SET {set_parts}, updated_at = NOW() WHERE id = %s RETURNING id",
+                (*set_values, model_id),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="LLM model not found")
+            conn.commit()
+    return {"id": model_id, "status": "updated"}
+
+
+@router.delete("/llm-models/{model_id}")
+def delete_llm_model(model_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM llm_model WHERE id = %s RETURNING id", (model_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="LLM model not found")
+            conn.commit()
+    return {"status": "deleted"}
+
+
+@router.get("/packages/{pkg_id}/llm-access")
+def get_package_llm_access(pkg_id: int, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM llm_model ORDER BY is_default DESC, name ASC")
+            all_models = [dict(r) for r in cur.fetchall()]
+            cur.execute(
+                "SELECT llm_model_id, is_default, features FROM package_llm_access WHERE package_id = %s",
+                (pkg_id,),
+            )
+            access_rows = {r["llm_model_id"]: {"is_default": r["is_default"], "features": r["features"]} for r in cur.fetchall()}
+    for m in all_models:
+        acc = access_rows.get(m["id"])
+        m["enabled"] = acc is not None
+        m["is_pkg_default"] = acc["is_default"] if acc else False
+        m["features"] = acc["features"] if acc else ["ai_recipe", "meal_plan"]
+        m["created_at"] = str(m["created_at"])
+        m["updated_at"] = str(m["updated_at"])
+    return {"package_id": pkg_id, "models": all_models}
+
+
+class PackageLLMAccessUpdate(BaseModel):
+    llm_model_id: int
+    enabled: bool
+    is_default: bool = False
+    features: list[str] = ["ai_recipe", "meal_plan"]
+
+
+@router.put("/packages/{pkg_id}/llm-access")
+def update_package_llm_access(pkg_id: int, body: PackageLLMAccessUpdate, request: Request):
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    import json as _json
+    features_json = _json.dumps(body.features)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if not body.enabled:
+                cur.execute(
+                    "DELETE FROM package_llm_access WHERE package_id = %s AND llm_model_id = %s",
+                    (pkg_id, body.llm_model_id),
+                )
+            else:
+                if body.is_default:
+                    cur.execute(
+                        "UPDATE package_llm_access SET is_default = FALSE WHERE package_id = %s",
+                        (pkg_id,),
+                    )
+                cur.execute(
+                    """INSERT INTO package_llm_access (package_id, llm_model_id, is_default, features)
+                       VALUES (%s, %s, %s, %s::jsonb)
+                       ON CONFLICT (package_id, llm_model_id) DO UPDATE
+                         SET is_default = EXCLUDED.is_default, features = EXCLUDED.features""",
+                    (pkg_id, body.llm_model_id, body.is_default, features_json),
+                )
+            conn.commit()
+    return {"status": "ok"}
+

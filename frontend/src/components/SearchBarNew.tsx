@@ -107,7 +107,7 @@ export default function SearchBarNew(props: {
 
   const showProviders = chatMode === 'Text'
     && (!pathname || pathname === '/' || pathname.startsWith('/instructions'))
-    && providers && providers.length > 0;
+    && providers && providers.length > 1;
 
   return (
     <div
