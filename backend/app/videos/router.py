@@ -7,15 +7,8 @@ router = APIRouter()
 
 
 def _get_user_from_request(req: Request) -> int | None:
-    auth_header = req.headers.get("authorization") or req.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        return None
-    token = auth_header.split(None, 1)[1].strip()
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM user_token WHERE token = %s AND (expires_at IS NULL OR expires_at > NOW())", (token,))
-            r = cur.fetchone()
-            return r["user_id"] if r else None
+    from app.core.security import get_user_id_from_bearer
+    return get_user_id_from_bearer(req)
 
 
 @router.post("/", response_model=VideoOut)

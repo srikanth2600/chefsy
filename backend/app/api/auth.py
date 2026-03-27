@@ -13,6 +13,7 @@ import pathlib
 from app.core.db import get_connection
 import psycopg
 from app.core.config import settings
+from app.core.security import create_access_token, decode_token
 from psycopg.types.json import Json
 
 router = APIRouter(prefix="/auth")
@@ -20,12 +21,26 @@ logger = logging.getLogger(__name__)
 
 
 class RegisterRequest(BaseModel):
+    # ── Account classification ────────────────────────────────────────────────
+    account_type: str = "general"          # "general" | "organization"
+
+    # ── Common fields ─────────────────────────────────────────────────────────
     full_name: str
     email: EmailStr
     password: str | None = None
+    # Phone: 10-digit local number only (no country code, e.g. "9876543210")
     phone: str | None = None
+
+    # ── General (Food Lover) fields ───────────────────────────────────────────
+    gender: str | None = None              # Male / Female / Other / Prefer not to say
+
+    # ── Organization fields ───────────────────────────────────────────────────
+    organization_type_id: int | None = None   # FK → organization_type.id
+    organization_name: str | None = None      # Trading / official name
+
+    # ── Legacy / chef-specific ────────────────────────────────────────────────
     user_type: str | None = None
-    chef_slug: str | None = None  # Required when user_type is Chef or Restaurant/Foodcourt
+    chef_slug: str | None = None  # Required when org type maps to Chef/Restaurant
 
 
 class OTPRequest(BaseModel):
@@ -83,16 +98,99 @@ def _send_otp_via_email_or_log(phone: str | None, code: str, purpose: str, email
     logger.info("OTP for %s to %s (email=%s): %s", purpose, phone, email, code)
 
 
-@router.post("/register")
-def register(req: RegisterRequest):
-    # Register with optional password. If password provided, set it and mark verified.
+def _validate_phone(phone: str) -> str:
+    """
+    Accepts a 10-digit local phone number (no country code).
+    Strips spaces/hyphens/parentheses then enforces exactly 10 digits.
+    Raises HTTPException 400 on failure; returns the cleaned 10-digit string.
+    """
+    cleaned = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if not cleaned.isdigit() or len(cleaned) != 10:
+        raise HTTPException(
+            status_code=400,
+            detail="Phone number must be exactly 10 digits (no country code, e.g. 9876543210).",
+        )
+    return cleaned
+
+
+def _resolve_user_type(req: "RegisterRequest") -> str | None:
+    """
+    Derive the legacy user_type string from the new account_type/org fields.
+    For organization accounts we look up the org type name to keep backward compat.
+    """
+    if req.account_type == "general":
+        return req.user_type or "General"
+    # organization — look up org type name to use as user_type
+    if req.organization_type_id:
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT name FROM organization_type WHERE id = %s", (req.organization_type_id,))
+                    row = cur.fetchone()
+                    if row:
+                        return row["name"]
+        except Exception:
+            pass
+    return req.user_type or "Organization"
+
+
+@router.get("/organization-types")
+def list_organization_types():
+    """Public endpoint: returns active organization types for the registration form."""
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # If phone provided, ensure it isn't already taken by a DIFFERENT email
-            if req.phone:
+            cur.execute(
+                """
+                SELECT id, name, description, icon, sort_order
+                FROM organization_type
+                WHERE is_active = TRUE
+                ORDER BY sort_order, name
+                """
+            )
+            rows = cur.fetchall()
+            return {"types": [dict(r) for r in rows]}
+
+
+@router.post("/register")
+def register(req: RegisterRequest):
+    """
+    Register a new user.
+
+    account_type = 'general'      → Food Lover flow
+                                    Required: full_name, email, password
+                                    Optional: phone (10-digit), gender
+
+    account_type = 'organization' → Organization flow
+                                    Required: full_name, email, password,
+                                              organization_type_id, organization_name
+                                    Optional: phone (10-digit)
+                                    If org type is Chef/Restaurant: chef_slug required
+    """
+    # ── Validation ────────────────────────────────────────────────────────────
+    if req.account_type not in ("general", "organization"):
+        raise HTTPException(status_code=400, detail="account_type must be 'general' or 'organization'.")
+
+    if req.account_type == "organization":
+        if not req.organization_type_id:
+            raise HTTPException(status_code=400, detail="organization_type_id is required for organization accounts.")
+        if not req.organization_name or not req.organization_name.strip():
+            raise HTTPException(status_code=400, detail="organization_name is required for organization accounts.")
+
+    # Clean & validate phone
+    phone_clean: str | None = None
+    if req.phone and req.phone.strip():
+        phone_clean = _validate_phone(req.phone)
+
+    # Derive user_type for backward compatibility
+    user_type = _resolve_user_type(req)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Ensure phone isn't already taken by a DIFFERENT email
+            if phone_clean:
                 cur.execute(
                     "SELECT email FROM users WHERE phone = %s LIMIT 1",
-                    (req.phone,),
+                    (phone_clean,),
                 )
                 existing = cur.fetchone()
                 if existing and existing["email"] != req.email:
@@ -106,22 +204,38 @@ def register(req: RegisterRequest):
             if req.password:
                 salt = _generate_salt()
                 pw_hash = _hash_password(req.password, salt)
-            # Create or update user record (email unique)
+
+            org_name = req.organization_name.strip() if req.organization_name else None
+
             try:
-              cur.execute(
-                """
-                INSERT INTO users (full_name, email, phone, user_type, password_hash, password_salt, is_verified)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (email) DO UPDATE
-                  SET full_name = EXCLUDED.full_name,
-                      phone = EXCLUDED.phone,
-                      user_type = EXCLUDED.user_type,
-                      password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
-                      password_salt = COALESCE(EXCLUDED.password_salt, users.password_salt)
-                RETURNING id, phone, email
-                """,
-                (req.full_name, req.email, req.phone, req.user_type, pw_hash, salt, bool(req.password)),
-              )
+                cur.execute(
+                    """
+                    INSERT INTO users (
+                        full_name, email, phone, user_type,
+                        account_type, organization_type_id, organization_name,
+                        gender,
+                        password_hash, password_salt, is_verified
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (email) DO UPDATE
+                      SET full_name            = EXCLUDED.full_name,
+                          phone                = EXCLUDED.phone,
+                          user_type            = EXCLUDED.user_type,
+                          account_type         = EXCLUDED.account_type,
+                          organization_type_id = EXCLUDED.organization_type_id,
+                          organization_name    = EXCLUDED.organization_name,
+                          gender               = EXCLUDED.gender,
+                          password_hash        = COALESCE(EXCLUDED.password_hash, users.password_hash),
+                          password_salt        = COALESCE(EXCLUDED.password_salt, users.password_salt)
+                    RETURNING id, phone, email
+                    """,
+                    (
+                        req.full_name, req.email, phone_clean, user_type,
+                        req.account_type, req.organization_type_id, org_name,
+                        req.gender,
+                        pw_hash, salt, bool(req.password),
+                    ),
+                )
             except psycopg.errors.UniqueViolation:
                 raise HTTPException(
                     status_code=400,
@@ -132,7 +246,7 @@ def register(req: RegisterRequest):
             phone = row["phone"]
             email = row.get("email")
 
-            # If password not provided, fall back to OTP registration flow (existing behavior)
+            # If password not provided, fall back to OTP registration flow
             if not req.password:
                 code = _generate_code()
                 expires = datetime.utcnow() + timedelta(minutes=10)
@@ -162,20 +276,23 @@ def register(req: RegisterRequest):
                 return resp
             else:
                 conn.commit()
-                # Auto-create chef_profile if user is a chef/restaurant and provided a slug
-                if req.user_type in ("Chef", "Restaurant/Foodcourt") and req.chef_slug:
-                    try:
-                        from app.chef.schema import ChefProfileCreate
-                        from app.chef import service as chef_service
-                        chef_data = ChefProfileCreate(
-                            slug=req.chef_slug,
-                            designation=req.user_type,
-                        )
-                        chef_service.create_profile(user_id, chef_data)
-                        logger.info("Auto-created chef_profile for user %s with slug '%s'", user_id, req.chef_slug)
-                    except Exception:
-                        logger.exception("Failed to auto-create chef_profile for user %s (non-fatal)", user_id)
+                # Auto-create chef_profile for Chef / Restaurant org types or legacy user_type
+                _maybe_create_chef_profile(user_id, user_type, req.chef_slug)
                 return {"status": "ok", "email": email, "user_id": user_id}
+
+
+def _maybe_create_chef_profile(user_id: int, user_type: str | None, chef_slug: str | None) -> None:
+    """Create a chef_profile record when the account is a Chef or Restaurant type."""
+    chef_types = {"Chef", "Restaurant", "Restaurant/Foodcourt"}
+    if user_type in chef_types and chef_slug:
+        try:
+            from app.chef.schema import ChefProfileCreate
+            from app.chef import service as chef_service
+            chef_data = ChefProfileCreate(slug=chef_slug, designation=user_type)
+            chef_service.create_profile(user_id, chef_data)
+            logger.info("Auto-created chef_profile for user %s with slug '%s'", user_id, chef_slug)
+        except Exception:
+            logger.exception("Failed to auto-create chef_profile for user %s (non-fatal)", user_id)
 
 
 @router.post("/request-otp")
@@ -222,10 +339,13 @@ class LoginRequest(BaseModel):
 
 @router.post("/login")
 def login(req: LoginRequest):
-    """Authenticate user via email+password and return token."""
+    """Authenticate user via email+password and return a signed JWT access token."""
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, password_hash, password_salt FROM users WHERE email = %s", (req.email,))
+            cur.execute(
+                "SELECT id, password_hash, password_salt, is_admin FROM users WHERE email = %s",
+                (req.email,),
+            )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=401, detail="Invalid credentials")
@@ -236,9 +356,13 @@ def login(req: LoginRequest):
             if _hash_password(req.password, salt) != stored_hash:
                 raise HTTPException(status_code=401, detail="Invalid credentials")
             user_id = row["id"]
-            token = str(uuid.uuid4())
-            expires = datetime.utcnow() + timedelta(days=7)
-            cur.execute("INSERT INTO user_token (token, user_id, expires_at) VALUES (%s, %s, %s)", (token, user_id, expires))
+            is_admin = bool(row.get("is_admin"))
+            jti, token = create_access_token(user_id, is_admin=is_admin)
+            expires = datetime.utcnow() + timedelta(days=settings.jwt_access_expire_days)
+            cur.execute(
+                "INSERT INTO user_token (token, user_id, expires_at) VALUES (%s, %s, %s)",
+                (jti, user_id, expires),
+            )
             conn.commit()
             return {"status": "ok", "token": token, "user_id": user_id}
 
@@ -297,15 +421,22 @@ def verify_otp(req: VerifyOTPRequest):
             # mark user verified
             cur.execute("UPDATE users SET is_verified = TRUE WHERE id = %s", (user_id,))
 
-            # create token
-            token = str(uuid.uuid4())
-            expires = datetime.utcnow() + timedelta(days=7)
+            # create JWT access token
+            is_admin_flag = False
+            try:
+                cur.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
+                _r = cur.fetchone()
+                is_admin_flag = bool(_r and _r.get("is_admin"))
+            except Exception:
+                pass
+            jti, token = create_access_token(user_id, is_admin=is_admin_flag)
+            expires = datetime.utcnow() + timedelta(days=settings.jwt_access_expire_days)
             cur.execute(
                 """
                 INSERT INTO user_token (token, user_id, expires_at)
                 VALUES (%s, %s, %s)
                 """,
-                (token, user_id, expires),
+                (jti, user_id, expires),
             )
             conn.commit()
             return {"status": "ok", "token": token, "user_id": user_id}
@@ -313,16 +444,23 @@ def verify_otp(req: VerifyOTPRequest):
 
 @router.post("/logout")
 def logout(request: Request):
-    """Invalidate current bearer token (logout)."""
+    """Revoke the current JWT by deleting its jti from the active sessions table."""
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth or not auth.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    token = auth.split(None, 1)[1].strip()
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM user_token WHERE token = %s", (token,))
-            conn.commit()
-            return {"status": "ok"}
+    raw = auth.split(None, 1)[1].strip()
+    try:
+        payload = decode_token(raw)
+        jti = payload.get("jti")
+    except HTTPException:
+        # Token already invalid — treat as already logged out
+        return {"status": "ok"}
+    if jti:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM user_token WHERE token = %s", (jti,))
+                conn.commit()
+    return {"status": "ok"}
 
 
 class PasswordResetRequest(BaseModel):
@@ -386,11 +524,8 @@ def verify_password_reset(req: PasswordResetVerify):
 
 @router.get("/me")
 def me(request: Request):
-    """Return authenticated user's profile based on Bearer token."""
-    auth = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth or not auth.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    token = auth.split(None, 1)[1].strip()
+    """Return authenticated user's profile based on JWT Bearer token."""
+    user_id = _get_user_id_from_token(request)
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -400,16 +535,18 @@ def me(request: Request):
                        u.gender, u.address,
                        u.address_line1, u.address_line2, u.city, u.postcode,
                        u.latitude, u.longitude, u.body_info,
-                       ut.expires_at
-                FROM user_token ut
-                JOIN users u ON u.id = ut.user_id
-                WHERE ut.token = %s AND (ut.expires_at IS NULL OR ut.expires_at > NOW())
+                       u.account_type, u.organization_type_id, u.organization_name,
+                       ot.name AS organization_type_name,
+                       ot.icon AS organization_type_icon
+                FROM users u
+                LEFT JOIN organization_type ot ON ot.id = u.organization_type_id
+                WHERE u.id = %s
                 """,
-                (token,),
+                (user_id,),
             )
             row = cur.fetchone()
             if not row:
-                raise HTTPException(status_code=401, detail="Invalid or expired token")
+                raise HTTPException(status_code=401, detail="User not found")
             return {
                 "id": row["id"],
                 "full_name": row["full_name"],
@@ -430,6 +567,11 @@ def me(request: Request):
                 "latitude": float(row["latitude"]) if row.get("latitude") is not None else None,
                 "longitude": float(row["longitude"]) if row.get("longitude") is not None else None,
                 "body_info": row.get("body_info") or {},
+                "account_type": row.get("account_type") or "general",
+                "organization_type_id": row.get("organization_type_id"),
+                "organization_type_name": row.get("organization_type_name"),
+                "organization_type_icon": row.get("organization_type_icon"),
+                "organization_name": row.get("organization_name"),
             }
 
 
@@ -437,17 +579,20 @@ def _get_user_id_from_token(request: Request) -> int:
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth or not auth.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    token = auth.split(None, 1)[1].strip()
+    raw = auth.split(None, 1)[1].strip()
+    payload = decode_token(raw)  # raises 401 if signature/expiry invalid
+    jti = payload.get("jti")
+    user_id = int(payload["sub"])
+    # Confirm token hasn't been revoked via logout
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT user_id FROM user_token WHERE token = %s AND (expires_at IS NULL OR expires_at > NOW())",
-                (token,),
+                "SELECT 1 FROM user_token WHERE token = %s AND (expires_at IS NULL OR expires_at > NOW())",
+                (jti,),
             )
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=401, detail="Invalid or expired token")
-            return row["user_id"]
+            if not cur.fetchone():
+                raise HTTPException(status_code=401, detail="Token has been revoked. Please log in again.")
+    return user_id
 
 
 class UpdateProfileRequest(BaseModel):
@@ -577,8 +722,8 @@ def dev_setup(email: EmailStr | None = None):
             )
             user_id = cur.fetchone()["id"]
 
-            # create token
-            token = str(uuid.uuid4())
+            # create JWT token
+            jti, token = create_access_token(user_id)
             expires = datetime.utcnow() + timedelta(days=30)
             cur.execute(
                 """
@@ -586,7 +731,7 @@ def dev_setup(email: EmailStr | None = None):
                 VALUES (%s, %s, %s)
                 ON CONFLICT (token) DO NOTHING
                 """,
-                (token, user_id, expires),
+                (jti, user_id, expires),
             )
 
             # insert sample recipe (veg-biryani)

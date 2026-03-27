@@ -626,3 +626,527 @@ def run_startup_migrations() -> None:
                     logger.info("Seeded %d default LLM models", len(seeds))
     except Exception:
         logger.exception("Failed to seed default LLM models (continuing)")
+
+    # ── Organisation module tables ────────────────────────────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # platform_module — Super Admin toggle: enable/disable entire org type
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS platform_module (
+                      id           SERIAL PRIMARY KEY,
+                      module_key   TEXT NOT NULL UNIQUE,
+                      display_name TEXT NOT NULL,
+                      description  TEXT,
+                      is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+                      updated_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                for key, name, desc in [
+                    ("corporate", "Corporate", "B2B corporate wellness & meal planning"),
+                    ("gym",       "Gym",       "Gym & fitness centre management"),
+                    ("nutrition", "Nutrition", "Nutrition practice & clinical diet management"),
+                    ("others",    "Others",    "General organisations & communities"),
+                ]:
+                    cur.execute(
+                        "INSERT INTO platform_module (module_key, display_name, description) "
+                        "VALUES (%s, %s, %s) ON CONFLICT (module_key) DO NOTHING",
+                        (key, name, desc),
+                    )
+
+                # org_profile — one row per registered organisation
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_profile (
+                      id              SERIAL PRIMARY KEY,
+                      admin_user_id   INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                      org_type        TEXT NOT NULL
+                                        CHECK (org_type IN ('corporate','gym','nutrition','others')),
+                      org_name        TEXT NOT NULL,
+                      slug            TEXT NOT NULL UNIQUE,
+                      tagline         TEXT,
+                      logo_url        TEXT,
+                      banner_url      TEXT,
+                      official_email  TEXT NOT NULL,
+                      phone           TEXT,
+                      website_url     TEXT,
+                      address_line1   TEXT,
+                      city            TEXT,
+                      state           TEXT,
+                      pincode         TEXT,
+                      latitude        NUMERIC,
+                      longitude       NUMERIC,
+                      active_modules  JSONB NOT NULL DEFAULT '["meal_planning","compliance","notifications"]',
+                      org_rules_json  JSONB NOT NULL DEFAULT '{}',
+                      plan            TEXT NOT NULL DEFAULT 'starter',
+                      is_verified     BOOLEAN NOT NULL DEFAULT FALSE,
+                      is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+                      is_public       BOOLEAN NOT NULL DEFAULT FALSE,
+                      subdomain       TEXT UNIQUE,
+                      accent_color    TEXT DEFAULT '#3B82F6',
+                      member_count    INTEGER NOT NULL DEFAULT 0,
+                      group_count     INTEGER NOT NULL DEFAULT 0,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_profile_admin  ON org_profile(admin_user_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_profile_type   ON org_profile(org_type)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_profile_slug   ON org_profile(slug)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_profile_city   ON org_profile(city)")
+
+                # org_staff — trainers, nutritionists, HR staff scoped to an org
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_staff (
+                      id          SERIAL PRIMARY KEY,
+                      org_id      INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                      role        TEXT NOT NULL,
+                      permissions JSONB NOT NULL DEFAULT '{}',
+                      is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+                      invited_at  TIMESTAMPTZ,
+                      joined_at   TIMESTAMPTZ,
+                      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (org_id, user_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_staff_org  ON org_staff(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_staff_user ON org_staff(user_id)")
+
+                # org_member — end users (employees/gym members/patients); many-to-many user ↔ org
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_member (
+                      id             SERIAL PRIMARY KEY,
+                      org_id         INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      user_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      email          TEXT NOT NULL,
+                      full_name      TEXT,
+                      phone          TEXT,
+                      status         TEXT NOT NULL DEFAULT 'invited'
+                                       CHECK (status IN ('invited','profile_incomplete','active','inactive','suspended')),
+                      invite_token   TEXT UNIQUE,
+                      invite_sent_at TIMESTAMPTZ,
+                      joined_at      TIMESTAMPTZ,
+                      member_meta    JSONB NOT NULL DEFAULT '{}',
+                      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (org_id, email)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_member_org    ON org_member(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_member_user   ON org_member(user_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_member_status ON org_member(status)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_member_token  ON org_member(invite_token)")
+
+                # org_group — cohort/group within an org
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_group (
+                      id                SERIAL PRIMARY KEY,
+                      org_id            INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      name              TEXT NOT NULL,
+                      description       TEXT,
+                      group_type        TEXT NOT NULL DEFAULT 'general',
+                      color             TEXT DEFAULT '#3B82F6',
+                      icon              TEXT DEFAULT 'group',
+                      meal_plan_type    TEXT DEFAULT 'general',
+                      medical_condition TEXT,
+                      plan_cadence      TEXT NOT NULL DEFAULT 'weekly',
+                      auto_publish      BOOLEAN NOT NULL DEFAULT FALSE,
+                      assigned_staff_id INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      group_rules_json  JSONB NOT NULL DEFAULT '{}',
+                      is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+                      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_group_org  ON org_group(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_group_type ON org_group(group_type)")
+
+                # org_group_member — member ↔ group (many-to-many; one member can be in multiple groups)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_group_member (
+                      id        SERIAL PRIMARY KEY,
+                      group_id  INTEGER NOT NULL REFERENCES org_group(id) ON DELETE CASCADE,
+                      member_id INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      added_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      added_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (group_id, member_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ogm_group  ON org_group_member(group_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ogm_member ON org_group_member(member_id)")
+
+                # Ensure suspension columns exist on org_profile (idempotent)
+                for col_sql in [
+                    "ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS suspension_reason TEXT",
+                    "ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMPTZ",
+                    "ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS suspended_by INTEGER REFERENCES users(id) ON DELETE SET NULL",
+                ]:
+                    cur.execute(col_sql)
+
+                # org_admin_action — full audit log of admin enforcement actions on orgs
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_admin_action (
+                      id           SERIAL PRIMARY KEY,
+                      org_id       INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      action       TEXT NOT NULL,
+                      reason       TEXT,
+                      performed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_oaa_org ON org_admin_action(org_id)")
+
+                # users.primary_org_id — fast org-switcher default
+                cur.execute(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS primary_org_id INTEGER REFERENCES org_profile(id) ON DELETE SET NULL"
+                )
+
+                conn.commit()
+                logger.info("Ensured org module tables (platform_module, org_profile, org_staff, org_member, org_group, org_group_member, org_admin_action)")
+    except Exception:
+        logger.exception("Failed to create org module tables (continuing)")
+
+    # ── Org shared module tables ────────────────────────────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # org_meal_plan_batch — bulk AI plan generation run
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_meal_plan_batch (
+                      id              SERIAL PRIMARY KEY,
+                      org_id          INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      group_id        INTEGER REFERENCES org_group(id) ON DELETE SET NULL,
+                      initiated_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      batch_name      TEXT,
+                      status          TEXT NOT NULL DEFAULT 'queued'
+                                        CHECK (status IN ('queued','processing','partial_complete','review_pending','approved','published','failed')),
+                      total_members   INTEGER NOT NULL DEFAULT 0,
+                      processed_count INTEGER NOT NULL DEFAULT 0,
+                      failed_count    INTEGER NOT NULL DEFAULT 0,
+                      week_start_date DATE,
+                      reviewed_by     INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      reviewed_at     TIMESTAMPTZ,
+                      published_at    TIMESTAMPTZ,
+                      notes           TEXT,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_batch_org    ON org_meal_plan_batch(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_batch_group  ON org_meal_plan_batch(group_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_batch_status ON org_meal_plan_batch(status)")
+
+                # org_member_meal_plan — individual plan within a batch
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_member_meal_plan (
+                      id           SERIAL PRIMARY KEY,
+                      batch_id     INTEGER NOT NULL REFERENCES org_meal_plan_batch(id) ON DELETE CASCADE,
+                      member_id    INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      meal_plan_id INTEGER REFERENCES meal_plan(id) ON DELETE SET NULL,
+                      status       TEXT NOT NULL DEFAULT 'pending'
+                                     CHECK (status IN ('pending','generated','review_pending','approved','published','failed')),
+                      staff_notes  TEXT,
+                      error_msg    TEXT,
+                      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (batch_id, member_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ommp_batch  ON org_member_meal_plan(batch_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_ommp_member ON org_member_meal_plan(member_id)")
+
+                # org_content — reels / articles / health tips (shared across org types)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_content (
+                      id            SERIAL PRIMARY KEY,
+                      org_id        INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      staff_id      INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      content_type  TEXT NOT NULL
+                                      CHECK (content_type IN ('reel','health_tip','article','workout_video','recipe_demo')),
+                      title         TEXT NOT NULL,
+                      description   TEXT,
+                      hashtags      JSONB NOT NULL DEFAULT '[]',
+                      video_url     TEXT,
+                      video_file    TEXT,
+                      thumbnail     TEXT,
+                      platform      TEXT,
+                      body_text     TEXT,
+                      target_group  TEXT DEFAULT 'all',
+                      status        TEXT NOT NULL DEFAULT 'active'
+                                      CHECK (status IN ('draft','active','archived')),
+                      view_count    INTEGER NOT NULL DEFAULT 0,
+                      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_content_org  ON org_content(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_org_content_type ON org_content(content_type)")
+
+                # org_compliance_log — daily member check-ins (privacy-critical)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_compliance_log (
+                      id                   SERIAL PRIMARY KEY,
+                      member_id            INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      log_date             DATE NOT NULL,
+                      breakfast            TEXT CHECK (breakfast IN ('yes','partial','no')),
+                      lunch                TEXT CHECK (lunch IN ('yes','partial','no')),
+                      dinner               TEXT CHECK (dinner IN ('yes','partial','no')),
+                      snack                TEXT CHECK (snack IN ('yes','partial','no')),
+                      weight_kg            NUMERIC(5,2),
+                      mood_score           SMALLINT CHECK (mood_score BETWEEN 1 AND 5),
+                      energy_score         SMALLINT CHECK (energy_score BETWEEN 1 AND 5),
+                      workout_done         BOOLEAN,
+                      workout_duration_min INTEGER,
+                      clinical_notes       TEXT,
+                      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (member_id, log_date)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_compliance_member ON org_compliance_log(member_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_compliance_date   ON org_compliance_log(log_date)")
+
+                # org_challenge + enrollment
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_challenge (
+                      id             SERIAL PRIMARY KEY,
+                      org_id         INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      group_id       INTEGER REFERENCES org_group(id) ON DELETE SET NULL,
+                      name           TEXT NOT NULL,
+                      description    TEXT,
+                      challenge_type TEXT,
+                      start_date     DATE NOT NULL,
+                      end_date       DATE NOT NULL,
+                      rules_json     JSONB NOT NULL DEFAULT '{}',
+                      is_anonymous   BOOLEAN NOT NULL DEFAULT TRUE,
+                      status         TEXT NOT NULL DEFAULT 'draft'
+                                       CHECK (status IN ('draft','active','completed')),
+                      created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_challenge_org ON org_challenge(org_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_challenge_enrollment (
+                      id           SERIAL PRIMARY KEY,
+                      challenge_id INTEGER NOT NULL REFERENCES org_challenge(id) ON DELETE CASCADE,
+                      member_id    INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      progress_pct SMALLINT NOT NULL DEFAULT 0,
+                      completed_at TIMESTAMPTZ,
+                      show_name    BOOLEAN NOT NULL DEFAULT TRUE,
+                      enrolled_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (challenge_id, member_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_challenge_enroll ON org_challenge_enrollment(challenge_id)")
+
+                # org_notification_log — broadcast messages
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_notification_log (
+                      id              SERIAL PRIMARY KEY,
+                      org_id          INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      sent_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      channel         TEXT NOT NULL CHECK (channel IN ('email','in_app','push')),
+                      audience_type   TEXT NOT NULL CHECK (audience_type IN ('all','group','member')),
+                      audience_ref_id INTEGER,
+                      subject         TEXT,
+                      body            TEXT NOT NULL,
+                      scheduled_at    TIMESTAMPTZ,
+                      sent_at         TIMESTAMPTZ,
+                      recipient_count INTEGER DEFAULT 0,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_notif_org ON org_notification_log(org_id)")
+
+                conn.commit()
+                logger.info("Ensured org shared module tables (batches, compliance, content, challenges, notifications)")
+    except Exception:
+        logger.exception("Failed to create org shared module tables (continuing)")
+
+    # ── Corporate-specific tables ───────────────────────────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS corporate_department (
+                      id         SERIAL PRIMARY KEY,
+                      org_id     INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      name       TEXT NOT NULL,
+                      parent_id  INTEGER REFERENCES corporate_department(id) ON DELETE CASCADE,
+                      head_email TEXT,
+                      budget_inr NUMERIC(12,2),
+                      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (org_id, name, parent_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_corp_dept_org ON corporate_department(org_id)")
+                conn.commit()
+                logger.info("Ensured corporate_department table")
+    except Exception:
+        logger.exception("Failed to create corporate_department table (continuing)")
+
+    # ── Gym-specific tables ─────────────────────────────────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gym_workout_plan (
+                      id             SERIAL PRIMARY KEY,
+                      org_id         INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      created_by     INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      name           TEXT NOT NULL,
+                      goal           TEXT,
+                      level          TEXT CHECK (level IN ('beginner','intermediate','advanced')),
+                      duration_weeks INTEGER,
+                      days_per_week  INTEGER,
+                      plan_json      JSONB NOT NULL DEFAULT '{}',
+                      is_template    BOOLEAN NOT NULL DEFAULT FALSE,
+                      is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+                      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_wplan_org ON gym_workout_plan(org_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gym_member_workout (
+                      id              SERIAL PRIMARY KEY,
+                      member_id       INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      workout_plan_id INTEGER NOT NULL REFERENCES gym_workout_plan(id) ON DELETE CASCADE,
+                      trainer_id      INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      start_date      DATE,
+                      end_date        DATE,
+                      is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (member_id, workout_plan_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_mworkout_member ON gym_member_workout(member_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gym_body_log (
+                      id              SERIAL PRIMARY KEY,
+                      member_id       INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      log_date        DATE NOT NULL,
+                      weight_kg       NUMERIC(5,2),
+                      body_fat_pct    NUMERIC(4,1),
+                      muscle_mass_kg  NUMERIC(5,2),
+                      waist_cm        NUMERIC(5,1),
+                      chest_cm        NUMERIC(5,1),
+                      arms_cm         NUMERIC(5,1),
+                      notes           TEXT,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (member_id, log_date)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_bodylog_member ON gym_body_log(member_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gym_class (
+                      id           SERIAL PRIMARY KEY,
+                      org_id       INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      trainer_id   INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      name         TEXT NOT NULL,
+                      class_type   TEXT,
+                      scheduled_at TIMESTAMPTZ NOT NULL,
+                      duration_min INTEGER NOT NULL DEFAULT 60,
+                      capacity     INTEGER,
+                      location     TEXT,
+                      status       TEXT NOT NULL DEFAULT 'scheduled'
+                                     CHECK (status IN ('scheduled','completed','cancelled')),
+                      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_class_org ON gym_class(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_class_scheduled ON gym_class(scheduled_at)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS gym_class_booking (
+                      id        SERIAL PRIMARY KEY,
+                      class_id  INTEGER NOT NULL REFERENCES gym_class(id) ON DELETE CASCADE,
+                      member_id INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      status    TEXT NOT NULL DEFAULT 'booked'
+                                  CHECK (status IN ('booked','attended','cancelled','no_show')),
+                      booked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (class_id, member_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_booking_class  ON gym_class_booking(class_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_gym_booking_member ON gym_class_booking(member_id)")
+
+                conn.commit()
+                logger.info("Ensured gym-specific tables (workout_plan, member_workout, body_log, class, class_booking)")
+    except Exception:
+        logger.exception("Failed to create gym-specific tables (continuing)")
+
+    # ── Nutrition-specific tables ───────────────────────────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS nutrition_client_clinical (
+                      id                SERIAL PRIMARY KEY,
+                      member_id         INTEGER NOT NULL UNIQUE REFERENCES org_member(id) ON DELETE CASCADE,
+                      conditions        JSONB NOT NULL DEFAULT '[]',
+                      medications       JSONB NOT NULL DEFAULT '[]',
+                      lab_values_json   JSONB NOT NULL DEFAULT '{}',
+                      food_intolerances JSONB NOT NULL DEFAULT '[]',
+                      lifestyle_notes   TEXT,
+                      clinical_goals    TEXT,
+                      consent_given     BOOLEAN NOT NULL DEFAULT FALSE,
+                      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nutr_clinical_member ON nutrition_client_clinical(member_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS nutrition_protocol (
+                      id                      SERIAL PRIMARY KEY,
+                      org_id                  INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      created_by              INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      name                    TEXT NOT NULL,
+                      condition               TEXT NOT NULL,
+                      description             TEXT,
+                      rules_json              JSONB NOT NULL DEFAULT '{}',
+                      system_prompt_injection TEXT,
+                      is_active               BOOLEAN NOT NULL DEFAULT TRUE,
+                      created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nutr_protocol_org ON nutrition_protocol(org_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS nutrition_plan_review (
+                      id              SERIAL PRIMARY KEY,
+                      batch_plan_id   INTEGER NOT NULL REFERENCES org_member_meal_plan(id) ON DELETE CASCADE,
+                      reviewed_by     INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      review_notes    TEXT,
+                      override_json   JSONB,
+                      status          TEXT NOT NULL DEFAULT 'pending'
+                                        CHECK (status IN ('pending','approved','rejected','override')),
+                      reviewed_at     TIMESTAMPTZ,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nutr_review_plan ON nutrition_plan_review(batch_plan_id)")
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS nutrition_consultation (
+                      id              SERIAL PRIMARY KEY,
+                      org_id          INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      member_id       INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      nutritionist_id INTEGER REFERENCES org_staff(id) ON DELETE SET NULL,
+                      session_date    DATE NOT NULL,
+                      notes           TEXT,
+                      action_items    JSONB NOT NULL DEFAULT '[]',
+                      next_session    DATE,
+                      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nutr_consult_org    ON nutrition_consultation(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_nutr_consult_member ON nutrition_consultation(member_id)")
+
+                conn.commit()
+                logger.info("Ensured nutrition-specific tables (clinical, protocol, plan_review, consultation)")
+    except Exception:
+        logger.exception("Failed to create nutrition-specific tables (continuing)")

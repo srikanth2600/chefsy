@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     # Redis URL for pub/sub (used for SSE push)
     redis_url: str = Field("redis://localhost:6379/0", env=("REDIS_URL", "redis_url"))
 
+    # JWT settings — set JWT_SECRET to a strong random value in production!
+    jwt_secret: str = Field("gharka-chef-change-me-in-production", env="JWT_SECRET")
+    jwt_algorithm: str = Field("HS256", env="JWT_ALGORITHM")
+    jwt_access_expire_days: int = Field(7, env="JWT_ACCESS_EXPIRE_DAYS")
+
     # Use model_config to read .env and ignore unknown keys (legacy names)
     model_config = {"env_file": ".env", "extra": "ignore"}
 

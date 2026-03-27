@@ -85,10 +85,13 @@ def get_slots_for_plan(plan_id: int) -> list[dict]:
 def update_meal_plan(plan_id: int, data: dict) -> None:
     fields = []
     values = []
-    for key in ("name", "description", "week_start_date"):
+    for key in ("name", "description", "week_start_date", "status"):
         if key in data and data[key] is not None:
             fields.append(f"{key} = %s")
             values.append(data[key])
+    if "preferences_json_raw" in data and data["preferences_json_raw"] is not None:
+        fields.append("preferences_json = %s")
+        values.append(Json(data["preferences_json_raw"]))
     if not fields:
         return
     fields.append("updated_at = NOW()")

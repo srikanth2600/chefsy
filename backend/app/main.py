@@ -12,6 +12,16 @@ from app.api import admin as admin_module
 from app.videos import router as videos_router
 from app.chef import router as chef_module
 from app.meal_plan import router as meal_plan_module
+from app.org import router as org_module
+from app.org.corporate import router as corporate_module
+from app.org.gym import router as gym_module
+from app.org.nutrition import router as nutrition_module
+from app.org.modules.meal_batch import router as meal_batch_module
+from app.org.modules.compliance import router as compliance_module
+from app.org.modules.content import router as content_module
+from app.org.modules.challenges import router as challenges_module
+from app.org.modules.notifications import router as notifications_module
+from app.org.member_router import router as org_member_portal
 from app.core.config import settings
 from app.core.db import init_db
 from app.application.recipe_service import generate_recipe
@@ -43,6 +53,20 @@ def create_app() -> FastAPI:
     app.include_router(chef_module.router, prefix="/chefs")
     # meal plan module
     app.include_router(meal_plan_module.router, prefix="/meal-plans")
+    # org core (shared: register, me/*, members, groups, memberships)
+    app.include_router(org_module.router, prefix="/org")
+    # org type-specific sub-modules (each checks platform_module.is_active guard)
+    app.include_router(corporate_module.router, prefix="/org/me/corporate")
+    app.include_router(gym_module.router, prefix="/org/me/gym")
+    app.include_router(nutrition_module.router, prefix="/org/me/nutrition")
+    # org shared modules
+    app.include_router(meal_batch_module, prefix="/org/me/meal-batches")
+    app.include_router(compliance_module, prefix="/org/me/compliance")
+    app.include_router(content_module, prefix="/org/me/content")
+    app.include_router(challenges_module, prefix="/org/me/challenges")
+    app.include_router(notifications_module, prefix="/org/me/notifications")
+    # member-facing portal (Tier 3 end-user endpoints)
+    app.include_router(org_member_portal, prefix="/org/member")
     return app
 
 

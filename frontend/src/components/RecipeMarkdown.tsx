@@ -175,6 +175,18 @@ function Btn({
   );
 }
 
+/* ── Chef mini card type ─────────────────────────── */
+interface ChefMini {
+  slug: string;
+  name: string;
+  designation: string | null;
+  avatar_url: string | null;
+  avatar_color: string | null;
+  rating: number | null;
+  recipe_count: number;
+  reel_count: number;
+}
+
 /* ══════════════════════════════════════════════════
    MAIN COMPONENT
 ══════════════════════════════════════════════════ */
@@ -198,6 +210,9 @@ export default function RecipeMarkdown({ recipe, cached, index }: RecipeMarkdown
   const [dislikeCount,setDislikeCount]= useState(0);
   const [userReaction,setUserReaction]= useState<'like' | 'dislike' | null>(null);
   const [videoRequested, setVideoRequested] = useState(false);
+  const [showChefs,      setShowChefs]      = useState(false);
+  const [chefs,          setChefs]          = useState<ChefMini[]>([]);
+  const [chefsLoading,   setChefsLoading]   = useState(false);
 
   /* ── Normalise ── */
   const meta       = recipe.meta || {};
@@ -640,61 +655,135 @@ ${nutrition.length ? `<h2>Nutrition</h2><div style="display:flex;flex-wrap:wrap;
           )}
         </div>
 
-        {/* 3 separate module links — clearly distinct */}
-        <div style={{
-          display: 'flex', flexWrap: 'wrap', gap: 6,
-          paddingTop: 10, borderTop: '1px solid var(--border)',
-        }}>
-          {/* 1. Find a Chef */}
-          <a href="/find-chef" style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            fontSize: 12, padding: '5px 11px', borderRadius: 8,
-            color: 'var(--text-secondary)', textDecoration: 'none',
-            border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-            fontWeight: 500, transition: 'all 0.15s',
-          }}
-            onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--accent-alpha-40)'; el.style.color='var(--accent)'; }}
-            onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--border)'; el.style.color='var(--text-secondary)'; }}
-          >
-            👨‍🍳 Find a Chef
-          </a>
+        {/* Action buttons row */}
+        <div style={{ paddingTop: 10, borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: showChefs ? 12 : 0 }}>
+            {/* 1. Find a Chef — toggle */}
+            <button
+              onClick={async () => {
+                const next = !showChefs;
+                setShowChefs(next);
+                if (next && chefs.length === 0) {
+                  setChefsLoading(true);
+                  try {
+                    const res = await fetch(`${apiBase}/chefs?per_page=6`);
+                    if (res.ok) {
+                      const data = await res.json();
+                      setChefs(data.chefs ?? []);
+                    }
+                  } catch { /* ignore */ }
+                  setChefsLoading(false);
+                }
+              }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                fontSize: 12, padding: '5px 11px', borderRadius: 8,
+                color: showChefs ? 'var(--accent)' : 'var(--text-secondary)',
+                border: `1px solid ${showChefs ? 'var(--accent-alpha-40)' : 'var(--border)'}`,
+                background: showChefs ? 'var(--accent-alpha-10)' : 'var(--bg-elevated)',
+                fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+              }}
+            >
+              👨‍🍳 Find a Chef
+            </button>
 
-          {/* 2. Restaurant Near You */}
-          <a href="/restaurants" style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            fontSize: 12, padding: '5px 11px', borderRadius: 8,
-            color: 'var(--text-secondary)', textDecoration: 'none',
-            border: '1px solid var(--border)', background: 'var(--bg-elevated)',
-            fontWeight: 500, transition: 'all 0.15s',
-          }}
-            onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--accent-alpha-40)'; el.style.color='var(--accent)'; }}
-            onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--border)'; el.style.color='var(--text-secondary)'; }}
-          >
-            🍽️ Restaurant Near You
-          </a>
+            {/* 2. Watch Video */}
+            <button
+              onClick={findVideo}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                fontSize: 12, padding: '5px 11px', borderRadius: 8,
+                color: videoRequested ? 'var(--accent)' : 'var(--text-secondary)',
+                border: `1px solid ${videoRequested ? 'var(--accent-alpha-40)' : 'var(--border)'}`,
+                background: videoRequested ? 'var(--accent-alpha-10)' : 'var(--bg-elevated)',
+                fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s',
+              }}
+              onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--accent-alpha-40)'; el.style.color='var(--accent)'; }}
+              onMouseLeave={e => { if (!videoRequested) { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--border)'; el.style.color='var(--text-secondary)'; } }}
+            >
+              {videoRequested ? '⏳ Searching…' : '▶ Watch Video'}
+            </button>
+          </div>
 
-          {/* 3. Watch Video */}
-          <button
-            onClick={findVideo}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5,
-              fontSize: 12, padding: '5px 11px', borderRadius: 8,
-              color: videoRequested ? 'var(--accent)' : 'var(--text-secondary)',
-              border: `1px solid ${videoRequested ? 'var(--accent-alpha-40)' : 'var(--border)'}`,
-              background: videoRequested ? 'var(--accent-alpha-10)' : 'var(--bg-elevated)',
-              fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
-              transition: 'all 0.15s',
-            }}
-            onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--accent-alpha-40)'; el.style.color='var(--accent)'; }}
-            onMouseLeave={e => {
-              if (!videoRequested) {
-                const el = e.currentTarget as HTMLElement;
-                el.style.borderColor='var(--border)'; el.style.color='var(--text-secondary)';
-              }
-            }}
-          >
-            {videoRequested ? '⏳ Searching…' : '▶ Watch Video'}
-          </button>
+          {/* Chef mini cards panel */}
+          {showChefs && (
+            <div>
+              {chefsLoading ? (
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0' }}>Loading chefs…</p>
+              ) : chefs.length === 0 ? (
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '8px 0' }}>No active chefs found.</p>
+              ) : (
+                <>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))',
+                    gap: 6,
+                  }}>
+                    {chefs.map(chef => {
+                      const avatarSrc = chef.avatar_url
+                        ? (chef.avatar_url.startsWith('http') ? chef.avatar_url : `${apiBase}${chef.avatar_url}`)
+                        : null;
+                      return (
+                        <a
+                          key={chef.slug}
+                          href={`/chef/${chef.slug}`}
+                          style={{
+                            display: 'flex', flexDirection: 'row', alignItems: 'center',
+                            gap: 8, padding: '8px 10px', borderRadius: 10,
+                            border: '1px solid var(--border)', background: 'var(--bg-elevated)',
+                            textDecoration: 'none', transition: 'border-color 0.15s, background 0.15s',
+                          }}
+                          onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--accent-alpha-40)'; el.style.background='var(--bg-surface)'; }}
+                          onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor='var(--border)'; el.style.background='var(--bg-elevated)'; }}
+                        >
+                          {/* Avatar beside name */}
+                          {avatarSrc ? (
+                            <img src={avatarSrc} alt={chef.name} style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />
+                          ) : (
+                            <div style={{
+                              width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
+                              background: chef.avatar_color ?? 'var(--accent)',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              fontSize: 15, color: '#fff', fontWeight: 700,
+                            }}>
+                              {chef.name.charAt(0).toUpperCase()}
+                            </div>
+                          )}
+
+                          {/* Right: name + rating + counts */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+                            <span style={{
+                              fontSize: 12, fontWeight: 600, color: 'var(--text-primary)',
+                              lineHeight: 1.2, whiteSpace: 'nowrap',
+                              overflow: 'hidden', textOverflow: 'ellipsis',
+                            }}>{chef.name}</span>
+
+                            {chef.rating != null && (
+                              <span style={{ fontSize: 11, color: '#F59E0B', fontWeight: 600, lineHeight: 1 }}>
+                                ★ {chef.rating.toFixed(1)}
+                              </span>
+                            )}
+
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              <span style={{ fontSize: 10, color: 'var(--text-secondary)', background: 'var(--bg-surface)', borderRadius: 5, padding: '1px 5px', border: '1px solid var(--border)' }}>
+                                🍳 {chef.recipe_count}
+                              </span>
+                              <span style={{ fontSize: 10, color: 'var(--text-secondary)', background: 'var(--bg-surface)', borderRadius: 5, padding: '1px 5px', border: '1px solid var(--border)' }}>
+                                🎬 {chef.reel_count}
+                              </span>
+                            </div>
+                          </div>
+                        </a>
+                      );
+                    })}
+                  </div>
+                  <a href="/find-chef" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 8, fontSize: 11, color: 'var(--accent)', textDecoration: 'none', fontWeight: 500 }}>
+                    View all chefs →
+                  </a>
+                </>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

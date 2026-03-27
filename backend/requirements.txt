@@ -10,3 +10,4 @@ psycopg[binary]
 openai
 email-validator
 python-multipart
+PyJWT>=2.8.0

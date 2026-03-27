@@ -14,6 +14,7 @@ class MealPlanUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     week_start_date: Optional[str] = None
+    status: Optional[str] = None  # 'active' | 'archived'
 
 
 class MealPlanGenerateRequest(BaseModel):
@@ -26,6 +27,7 @@ class MealPlanGenerateRequest(BaseModel):
     extra_context: Optional[str] = None
     body_lifestyle: Optional[dict] = None
     llm_provider: Optional[str] = None  # provider_id from /providers endpoint e.g. "groq:llama-3.1-8b-instant"
+    week_start_date: Optional[str] = None  # ISO date string, e.g. "2026-03-25"
 
 
 class SlotUpdate(BaseModel):

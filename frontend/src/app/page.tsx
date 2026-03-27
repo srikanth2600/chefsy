@@ -160,6 +160,15 @@ export default function Home() {
   const [userType,     setUserType]     = useState<string|null>(null);
   const [profileMenuOpen,  setProfileMenuOpen]  = useState(false);
 
+  // ── Registration multi-step state ──────────────────────────────────────────
+  const [regStep,           setRegStep]           = useState<1|2>(1);
+  const [regAccountType,    setRegAccountType]    = useState<'general'|'organization'|''>('');
+  const [authGender,        setAuthGender]        = useState('');
+  const [authOrgTypeId,     setAuthOrgTypeId]     = useState<number|null>(null);
+  const [authOrgName,       setAuthOrgName]       = useState('');
+  const [orgTypes,          setOrgTypes]          = useState<{id:number;name:string;description:string|null;icon:string|null}[]>([]);
+  const [orgTypesLoaded,    setOrgTypesLoaded]    = useState(false);
+
   const scrollRef = useRef<HTMLDivElement>(null);
   const seqMapRef = useRef<Record<string,number>>({});
   const { createChatSession } = useSearch();
@@ -338,27 +347,62 @@ export default function Home() {
   const registerUser=async()=>{
     const fullName = authFullName.trim();
     const email    = authEmail.trim();
-    const phone    = authPhone.trim()||null;
+    const phone    = authPhone.trim() || null;
     setAuthError('');
-    if(!email||!fullName||!authPassword){setAuthError('Please fill in all required fields.');return;}
+
+    // Common validation
+    if(!fullName||!email||!authPassword){setAuthError('Please fill in all required fields.');return;}
     if(!_isValidEmail(email)){setAuthError('Please enter a valid email address (e.g. user@example.com).');return;}
     if(authPassword.length < 6){setAuthError('Password must be at least 6 characters.');return;}
-    if(!authUserType){setAuthError('Please select a role.');return;}
-    if(phone && !/^\+?[\d\s\-().]{7,15}$/.test(phone)){setAuthError('Please enter a valid phone number (7–15 digits).');return;}
-    if((authUserType==='Chef'||authUserType==='Restaurant/Foodcourt') && chefSlugStatus!=='available'){setAuthError('Please choose an available profile name.');return;}
+
+    // Phone: 10-digit only if provided
+    if(phone){
+      const digits = phone.replace(/[\s\-()]/g,'');
+      if(!/^\d{10}$/.test(digits)){setAuthError('Phone must be exactly 10 digits with no country code (e.g. 9876543210).');return;}
+    }
+
+    // Organization-specific validation
+    if(regAccountType === 'organization'){
+      if(!authOrgTypeId){setAuthError('Please select an organization type.');return;}
+      if(!authOrgName.trim()){setAuthError('Please enter the organization name.');return;}
+    }
+
+    // Chef slug required for chef/restaurant org types
+    if(showChefSlug && chefSlugStatus !== 'available'){
+      setAuthError('Please choose an available profile name.');return;
+    }
+
     setAuthLoading(true);
     try{
+      const body: Record<string,unknown> = {
+        full_name: fullName,
+        email,
+        password: authPassword,
+        phone: phone || undefined,
+        account_type: regAccountType || 'general',
+      };
+      if(regAccountType === 'general'){
+        body.gender = authGender || undefined;
+      }
+      if(regAccountType === 'organization'){
+        body.organization_type_id = authOrgTypeId;
+        body.organization_name    = authOrgName.trim();
+      }
+      if(showChefSlug && authChefSlug){
+        body.chef_slug = normalizeSlug(authChefSlug);
+      }
+
       const r=await fetch(`${apiBase}/auth/register`,{
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({full_name:fullName,email,phone,user_type:authUserType,password:authPassword,chef_slug:(authUserType==='Chef'||authUserType==='Restaurant/Foodcourt')?normalizeSlug(authChefSlug)||undefined:undefined})
+        body:JSON.stringify(body),
       });
       if(!r.ok){
         const msg = await _getApiError(r);
         setAuthError(msg);
         return;
       }
-      // Registration succeeded — now log in
+      // Registration succeeded — auto login
       try{await loginUser();}catch{/* loginUser shows its own error */}
     }catch(err){
       setAuthError('Registration failed: '+(err instanceof Error ? err.message : 'Please try again'));
@@ -391,8 +435,25 @@ export default function Home() {
   };
   const handleLogout=()=>{try{['gharka_token','gharka_user_email','gharka_user_name','gharka_user_type'].forEach(k=>localStorage.removeItem(k));}catch{}setUserName(null);setUserEmailDisplay(null);setUserType(null);setProfileMenuOpen(false);setChatId(null);setMessages([]);setStreamReady(false);seqMapRef.current={};};
 
-  const showChefSlug = authUserType === 'Chef' || authUserType === 'Restaurant/Foodcourt';
+  const showChefSlug = authUserType === 'Chef' || authUserType === 'Restaurant/Foodcourt'
+    || (regAccountType === 'organization' && orgTypes.find(t => t.id === authOrgTypeId)?.name === 'Chef')
+    || (regAccountType === 'organization' && orgTypes.find(t => t.id === authOrgTypeId)?.name === 'Restaurant');
   const normalizeSlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+  // Fetch org types once when user opens register view
+  const loadOrgTypes = () => {
+    if (orgTypesLoaded) return;
+    fetch(`${apiBase}/auth/organization-types`).then(r=>r.ok?r.json():null).then(j=>{
+      if (Array.isArray(j?.types)) { setOrgTypes(j.types); setOrgTypesLoaded(true); }
+    }).catch(()=>{});
+  };
+
+  const resetRegForm = () => {
+    setRegStep(1); setRegAccountType(''); setAuthGender('');
+    setAuthOrgTypeId(null); setAuthOrgName(''); setAuthFullName('');
+    setAuthEmail(''); setAuthPassword(''); setAuthPhone('');
+    setAuthChefSlug(''); setChefSlugStatus('idle'); setAuthError('');
+  };
 
   useEffect(() => {
     if (!showChefSlug) { setChefSlugStatus('idle'); return; }
@@ -767,61 +828,234 @@ export default function Home() {
       {/* ══════ AUTH MODAL ══════ */}
       {showAuth&&(
         <div style={{position:'fixed',inset:0,zIndex:70,display:'flex'}}>
-          <div id="auth-img" style={{display:'none',width:'50%',position:'relative',overflow:'hidden',background:'var(--bg)'}}>
-            <img src="/chef-cooking.png" alt="" style={{objectFit:'cover',width:'100%',height:'100%',opacity:0.75}} onError={e=>{(e.currentTarget as HTMLImageElement).src='/logo.png';}}/>
-            <div style={{position:'absolute',inset:0,background:'linear-gradient(to right,transparent,rgba(0,0,0,0.3))'}}/>
-            <div style={{position:'absolute',bottom:40,left:36}}><h2 style={{fontSize:30,fontWeight:800,color:'#fff',margin:0}}>Cook with confidence.</h2><p style={{color:'rgba(255,255,255,0.65)',marginTop:6}}>AI-powered recipes for every kitchen.</p></div>
+          {/* Left panel — decorative image (tablet+) */}
+          <div id="auth-img" style={{display:'none',width:'42%',minWidth:320,maxWidth:480,position:'relative',overflow:'hidden',background:'var(--bg)',flexShrink:0}}>
+            <img src="/chef-cooking.png" alt="" style={{objectFit:'cover',width:'100%',height:'100%',opacity:0.78}} onError={e=>{(e.currentTarget as HTMLImageElement).src='/logo.png';}}/>
+            <div style={{position:'absolute',inset:0,background:'linear-gradient(to right,transparent 30%,rgba(0,0,0,0.35))'}}/>
+            <div style={{position:'absolute',bottom:40,left:36,right:24}}>
+              <h2 style={{fontSize:28,fontWeight:800,color:'#fff',margin:0,lineHeight:1.25}}>Cook with confidence.</h2>
+              <p style={{color:'rgba(255,255,255,0.65)',marginTop:8,fontSize:14}}>AI-powered recipes for every kitchen.</p>
+            </div>
           </div>
-          <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'24px',background:'var(--bg-elevated)',overflowY:'auto'}}>
-            <div style={{width:'100%',maxWidth:360}}>
-              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:28}}>
+
+          {/* Right panel — form */}
+          <div style={{flex:1,display:'flex',alignItems:'center',justifyContent:'center',padding:'20px 16px',background:'var(--bg-elevated)',overflowY:'auto'}}>
+            <div style={{width:'100%',maxWidth:400}}>
+
+              {/* Header */}
+              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:24}}>
                 <div>
-                  <h2 style={{fontSize:24,fontWeight:800,color:'var(--text-primary)',margin:0,letterSpacing:'-0.02em'}}>{authView==='login'?'Welcome back':authView==='register'?'Create account':authView==='reset'?'Reset password':'Verify code'}</h2>
-                  <p style={{fontSize:14,color:'var(--text-secondary)',margin:'6px 0 0'}}>{authView==='login'?'Sign in to your Chefsy account':authView==='register'?'Join Chefsy today':'Enter the details below'}</p>
+                  <h2 style={{fontSize:22,fontWeight:800,color:'var(--text-primary)',margin:0,letterSpacing:'-0.02em'}}>
+                    {authView==='login'?'Welcome back'
+                    :authView==='register'&&regStep===1?'Join Chefsy'
+                    :authView==='register'&&regAccountType==='general'?'Your account'
+                    :authView==='register'&&regAccountType==='organization'?'Organization details'
+                    :authView==='reset'?'Reset password':'Verify code'}
+                  </h2>
+                  <p style={{fontSize:13,color:'var(--text-secondary)',margin:'5px 0 0',lineHeight:1.5}}>
+                    {authView==='login'?'Sign in to your Chefsy account'
+                    :authView==='register'&&regStep===1?'Choose how you want to join'
+                    :authView==='register'&&regAccountType==='general'?'Just a few details to get started'
+                    :authView==='register'&&regAccountType==='organization'?'Tell us about your organization'
+                    :'Enter the details below'}
+                  </p>
                 </div>
-                <button onClick={()=>setShowAuth(false)} style={{width:34,height:34,borderRadius:8,border:'none',background:'var(--bg-elevated)',color:'var(--text-secondary)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center'}}><svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/></svg></button>
+                <button onClick={()=>{setShowAuth(false);resetRegForm();}}
+                  style={{width:32,height:32,borderRadius:8,border:'none',background:'var(--bg)',color:'var(--text-secondary)',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
               </div>
-              <div style={{display:'flex',flexDirection:'column',gap:12}}>
-                {authView==='login'&&<><input className="gk-input" placeholder="Email address" type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/><input className="gk-input" placeholder="Password" type="password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&loginUser()}/><div style={{textAlign:'right'}}><button onClick={()=>setAuthView('reset')} style={{fontSize:12,color:'var(--accent)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>Forgot password?</button></div><button className="gk-btn-primary" onClick={loginUser} disabled={authLoading||!authEmail||!authPassword} style={{width:'100%',padding:'12px'}}>{authLoading?'Signing in…':'Sign in'}</button></>}
-                {authView==='register'&&<>
-                  <input className="gk-input" placeholder="Full name" value={authFullName} onChange={e=>setAuthFullName(e.target.value)}/>
-                  <input className="gk-input" placeholder="Email address" type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/>
-                  <input className="gk-input" placeholder="Password" type="password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)}/>
-                  <input className="gk-input" placeholder="Phone (optional)" value={authPhone} onChange={e=>setAuthPhone(e.target.value)}/>
-                  <select className="gk-input" value={authUserType} onChange={e=>setAuthUserType(e.target.value)}>
-                    <option value="">Select role</option>
-                    {['Chef','Restaurant/Foodcourt','Working Professional','House Wife','Freelance','Student','Business','Other'].map(o=><option key={o} value={o}>{o}</option>)}
-                  </select>
-                  {showChefSlug && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <input
-                        className="gk-input"
-                        placeholder="Profile name (e.g., srikanth)"
-                        value={authChefSlug}
-                        onChange={e=>setAuthChefSlug(e.target.value)}
-                      />
-                      <div style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>
-                        URL: {normalizeSlug(authChefSlug || 'yourname')}.chefsy.com
-                      </div>
-                      <div style={{ fontSize: 11, color: chefSlugStatus==='available' ? 'var(--success)' : chefSlugStatus==='taken' || chefSlugStatus==='invalid' ? 'var(--danger)' : 'var(--text-tertiary)' }}>
-                        {chefSlugStatus==='checking' && 'Checking availability…'}
-                        {chefSlugStatus==='available' && 'Available'}
-                        {chefSlugStatus==='taken' && 'Already taken'}
-                        {chefSlugStatus==='invalid' && 'Please use at least 3 characters (letters/numbers)'}
-                        {chefSlugStatus==='error' && 'Unable to check now'}
-                        {chefSlugStatus==='idle' && ''}
+
+              <div style={{display:'flex',flexDirection:'column',gap:11}}>
+
+                {/* ── LOGIN ── */}
+                {authView==='login'&&(
+                  <>
+                    <input className="gk-input" placeholder="Email address" type="email" autoComplete="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/>
+                    <input className="gk-input" placeholder="Password" type="password" autoComplete="current-password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&loginUser()}/>
+                    <div style={{textAlign:'right',marginTop:-4}}>
+                      <button onClick={()=>setAuthView('reset')} style={{fontSize:12,color:'var(--accent)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>Forgot password?</button>
+                    </div>
+                    <button className="gk-btn-primary" onClick={loginUser} disabled={authLoading||!authEmail||!authPassword} style={{width:'100%',padding:'12px',marginTop:2}}>
+                      {authLoading?'Signing in…':'Sign in'}
+                    </button>
+                  </>
+                )}
+
+                {/* ── REGISTER — Step 1: account type picker ── */}
+                {authView==='register'&&regStep===1&&(
+                  <>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:4}}>
+                      {/* Food Lover card */}
+                      <button
+                        onClick={()=>{setRegAccountType('general');setRegStep(2);}}
+                        style={{
+                          display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+                          gap:10,padding:'20px 12px',borderRadius:14,
+                          border:`2px solid ${regAccountType==='general'?'var(--accent)':'var(--border)'}`,
+                          background:regAccountType==='general'?'var(--accent-alpha-10)':'var(--bg-surface)',
+                          cursor:'pointer',fontFamily:'inherit',transition:'all 0.18s',
+                        }}
+                        onMouseEnter={e=>{if(regAccountType!=='general'){(e.currentTarget as HTMLElement).style.borderColor='var(--accent-alpha-30)';}}}
+                        onMouseLeave={e=>{if(regAccountType!=='general'){(e.currentTarget as HTMLElement).style.borderColor='var(--border)';}}}
+                      >
+                        <span style={{fontSize:36}}>🍽️</span>
+                        <div style={{textAlign:'center'}}>
+                          <p style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',margin:0}}>Food Lover</p>
+                          <p style={{fontSize:11,color:'var(--text-tertiary)',margin:'4px 0 0',lineHeight:1.4}}>Personal account for recipes & meal plans</p>
+                        </div>
+                      </button>
+                      {/* Organization card */}
+                      <button
+                        onClick={()=>{setRegAccountType('organization');loadOrgTypes();setRegStep(2);}}
+                        style={{
+                          display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',
+                          gap:10,padding:'20px 12px',borderRadius:14,
+                          border:`2px solid ${regAccountType==='organization'?'var(--accent)':'var(--border)'}`,
+                          background:regAccountType==='organization'?'var(--accent-alpha-10)':'var(--bg-surface)',
+                          cursor:'pointer',fontFamily:'inherit',transition:'all 0.18s',
+                        }}
+                        onMouseEnter={e=>{if(regAccountType!=='organization'){(e.currentTarget as HTMLElement).style.borderColor='var(--accent-alpha-30)';}}}
+                        onMouseLeave={e=>{if(regAccountType!=='organization'){(e.currentTarget as HTMLElement).style.borderColor='var(--border)';}}}
+                      >
+                        <span style={{fontSize:36}}>🏢</span>
+                        <div style={{textAlign:'center'}}>
+                          <p style={{fontSize:14,fontWeight:700,color:'var(--text-primary)',margin:0}}>Organization</p>
+                          <p style={{fontSize:11,color:'var(--text-tertiary)',margin:'4px 0 0',lineHeight:1.4}}>Chef, Restaurant, GYM, Hospital & more</p>
+                        </div>
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {/* ── REGISTER — Step 2a: Food Lover form ── */}
+                {authView==='register'&&regStep===2&&regAccountType==='general'&&(
+                  <>
+                    {/* Back button */}
+                    <button onClick={()=>{setRegStep(1);setAuthError('');}}
+                      style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text-secondary)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:'0 0 4px',alignSelf:'flex-start'}}>
+                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 18l-6-6 6-6"/></svg>
+                      Back
+                    </button>
+                    <input className="gk-input" placeholder="Full name *" autoComplete="name" value={authFullName} onChange={e=>setAuthFullName(e.target.value)}/>
+                    <input className="gk-input" placeholder="Email address *" type="email" autoComplete="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/>
+                    <input className="gk-input" placeholder="Password *" type="password" autoComplete="new-password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)}/>
+                    <div style={{position:'relative'}}>
+                      <input className="gk-input" placeholder="Phone — 10 digits, no country code (optional)" inputMode="numeric" maxLength={10} value={authPhone} onChange={e=>setAuthPhone(e.target.value.replace(/\D/g,'').slice(0,10))} style={{paddingRight:90}}/>
+                      {authPhone.length>0&&(
+                        <span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:11,color:authPhone.length===10?'var(--success)':'var(--text-tertiary)',pointerEvents:'none'}}>
+                          {authPhone.length}/10
+                        </span>
+                      )}
+                    </div>
+                    {/* Gender */}
+                    <select className="gk-input" value={authGender} onChange={e=>setAuthGender(e.target.value)}>
+                      <option value="">Gender (optional)</option>
+                      {['Male','Female','Other','Prefer not to say'].map(g=><option key={g} value={g}>{g}</option>)}
+                    </select>
+                    {authError&&<p style={{margin:0,padding:'10px 12px',background:'rgba(239,68,68,0.08)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,fontSize:13,color:'#ef4444',lineHeight:1.5}}>{authError}</p>}
+                    <button className="gk-btn-primary" onClick={registerUser} disabled={authLoading||!authFullName||!authEmail||!authPassword} style={{width:'100%',padding:'12px',marginTop:2}}>
+                      {authLoading?'Creating account…':'Create account'}
+                    </button>
+                  </>
+                )}
+
+                {/* ── REGISTER — Step 2b: Organization form ── */}
+                {authView==='register'&&regStep===2&&regAccountType==='organization'&&(
+                  <>
+                    {/* Back button */}
+                    <button onClick={()=>{setRegStep(1);setAuthError('');}}
+                      style={{display:'flex',alignItems:'center',gap:6,fontSize:12,color:'var(--text-secondary)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:'0 0 4px',alignSelf:'flex-start'}}>
+                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M15 18l-6-6 6-6"/></svg>
+                      Back
+                    </button>
+                    {/* Org type selector — pill chips */}
+                    <div>
+                      <p style={{fontSize:12,color:'var(--text-secondary)',margin:'0 0 8px',fontWeight:500}}>Organization type *</p>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+                        {orgTypes.length===0&&<p style={{fontSize:12,color:'var(--text-tertiary)'}}>Loading…</p>}
+                        {orgTypes.map(t=>(
+                          <button key={t.id} onClick={()=>setAuthOrgTypeId(t.id)}
+                            style={{
+                              display:'flex',alignItems:'center',gap:6,
+                              padding:'7px 14px',borderRadius:999,fontSize:13,fontWeight:500,
+                              border:`1.5px solid ${authOrgTypeId===t.id?'var(--accent)':'var(--border)'}`,
+                              background:authOrgTypeId===t.id?'var(--accent-alpha-10)':'var(--bg-surface)',
+                              color:authOrgTypeId===t.id?'var(--accent)':'var(--text-secondary)',
+                              cursor:'pointer',fontFamily:'inherit',transition:'all 0.15s',
+                            }}>
+                            {t.icon&&<span style={{fontSize:15}}>{t.icon}</span>}
+                            {t.name}
+                          </button>
+                        ))}
                       </div>
                     </div>
-                  )}
-                  {authError && <p style={{margin:0,padding:'10px 12px',background:'var(--danger-alpha-10,rgba(239,68,68,0.1))',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,fontSize:13,color:'#ef4444',lineHeight:1.5}}>{authError}</p>}
-                  <button className="gk-btn-primary" onClick={registerUser} disabled={authLoading||!authFullName||!authEmail||!authPassword} style={{width:'100%',padding:'12px'}}>{authLoading?'Creating account…':'Create account'}</button>
-                </>}
-                {authView==='reset'&&<><input className="gk-input" placeholder="Email address" type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/><button className="gk-btn-primary" onClick={requestPasswordReset} disabled={authLoading||!authEmail} style={{width:'100%',padding:'12px'}}>{authLoading?'Sending…':'Send reset code'}</button></>}
-                {authView==='reset-verify'&&<><input className="gk-input" placeholder="Reset code" value={authOtp} onChange={e=>setAuthOtp(e.target.value)}/><input className="gk-input" placeholder="New password" type="password" value={authNewPassword} onChange={e=>setAuthNewPassword(e.target.value)}/><button className="gk-btn-primary" onClick={verifyPasswordReset} disabled={authLoading||!authOtp||!authNewPassword} style={{width:'100%',padding:'12px'}}>{authLoading?'Saving…':'Set new password'}</button></>}
+                    <input className="gk-input" placeholder="Organization name *" value={authOrgName} onChange={e=>setAuthOrgName(e.target.value)}/>
+                    <input className="gk-input" placeholder="Contact person full name *" autoComplete="name" value={authFullName} onChange={e=>setAuthFullName(e.target.value)}/>
+                    <input className="gk-input" placeholder="Email address *" type="email" autoComplete="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/>
+                    <input className="gk-input" placeholder="Password *" type="password" autoComplete="new-password" value={authPassword} onChange={e=>setAuthPassword(e.target.value)}/>
+                    <div style={{position:'relative'}}>
+                      <input className="gk-input" placeholder="Phone — 10 digits, no country code (optional)" inputMode="numeric" maxLength={10} value={authPhone} onChange={e=>setAuthPhone(e.target.value.replace(/\D/g,'').slice(0,10))} style={{paddingRight:90}}/>
+                      {authPhone.length>0&&(
+                        <span style={{position:'absolute',right:12,top:'50%',transform:'translateY(-50%)',fontSize:11,color:authPhone.length===10?'var(--success)':'var(--text-tertiary)',pointerEvents:'none'}}>
+                          {authPhone.length}/10
+                        </span>
+                      )}
+                    </div>
+                    {/* Chef slug for Chef/Restaurant org types */}
+                    {showChefSlug&&(
+                      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+                        <input className="gk-input" placeholder="Profile handle (e.g. my-restaurant)" value={authChefSlug} onChange={e=>setAuthChefSlug(e.target.value)}/>
+                        <div style={{display:'flex',justifyContent:'space-between',fontSize:11,paddingInline:2}}>
+                          <span style={{color:'var(--text-tertiary)'}}>chefsy.com/{normalizeSlug(authChefSlug||'yourname')}</span>
+                          <span style={{color:chefSlugStatus==='available'?'var(--success)':chefSlugStatus==='taken'||chefSlugStatus==='invalid'?'#ef4444':'var(--text-tertiary)'}}>
+                            {chefSlugStatus==='checking'&&'Checking…'}
+                            {chefSlugStatus==='available'&&'✓ Available'}
+                            {chefSlugStatus==='taken'&&'✗ Already taken'}
+                            {chefSlugStatus==='invalid'&&'Min 3 characters'}
+                            {chefSlugStatus==='error'&&'Cannot check now'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {authError&&<p style={{margin:0,padding:'10px 12px',background:'rgba(239,68,68,0.08)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,fontSize:13,color:'#ef4444',lineHeight:1.5}}>{authError}</p>}
+                    <button className="gk-btn-primary" onClick={registerUser} disabled={authLoading||!authFullName||!authEmail||!authPassword||!authOrgTypeId||!authOrgName} style={{width:'100%',padding:'12px',marginTop:2}}>
+                      {authLoading?'Creating account…':'Create account'}
+                    </button>
+                  </>
+                )}
+
+                {/* ── RESET PASSWORD ── */}
+                {authView==='reset'&&(
+                  <>
+                    <input className="gk-input" placeholder="Email address" type="email" value={authEmail} onChange={e=>setAuthEmail(e.target.value)}/>
+                    <button className="gk-btn-primary" onClick={requestPasswordReset} disabled={authLoading||!authEmail} style={{width:'100%',padding:'12px'}}>
+                      {authLoading?'Sending…':'Send reset code'}
+                    </button>
+                  </>
+                )}
+
+                {/* ── VERIFY RESET CODE ── */}
+                {authView==='reset-verify'&&(
+                  <>
+                    <input className="gk-input" placeholder="Reset code" value={authOtp} onChange={e=>setAuthOtp(e.target.value)}/>
+                    <input className="gk-input" placeholder="New password" type="password" value={authNewPassword} onChange={e=>setAuthNewPassword(e.target.value)}/>
+                    <button className="gk-btn-primary" onClick={verifyPasswordReset} disabled={authLoading||!authOtp||!authNewPassword} style={{width:'100%',padding:'12px'}}>
+                      {authLoading?'Saving…':'Set new password'}
+                    </button>
+                  </>
+                )}
+
               </div>
-              <p style={{textAlign:'center',fontSize:13,color:'var(--text-tertiary)',marginTop:24}}>
-                {authView!=='register'?(<>New here? <button onClick={()=>{setAuthView('register');setAuthError('');}} style={{color:'var(--accent)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:500}}>Create an account</button></>):(<>Already have an account? <button onClick={()=>{setAuthView('login');setAuthError('');}} style={{color:'var(--accent)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:500}}>Sign in</button></>)}
+
+              {/* Footer link */}
+              <p style={{textAlign:'center',fontSize:13,color:'var(--text-tertiary)',marginTop:22}}>
+                {authView!=='register'
+                  ?(<>New here?{' '}<button onClick={()=>{setAuthView('register');resetRegForm();}} style={{color:'var(--accent)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:500}}>Create an account</button></>)
+                  :(<>Already have an account?{' '}<button onClick={()=>{setAuthView('login');setAuthError('');}} style={{color:'var(--accent)',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',fontSize:13,fontWeight:500}}>Sign in</button></>)
+                }
               </p>
+
             </div>
           </div>
         </div>

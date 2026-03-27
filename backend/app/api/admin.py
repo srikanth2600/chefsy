@@ -1,4 +1,5 @@
-from fastapi import APIRouter, HTTPException, Request
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Request, Query
 from app.core.db import get_connection
 from pydantic import BaseModel
 from psycopg.types.json import Json
@@ -10,12 +11,21 @@ def _get_user_id_from_request(req: Request):
     auth = req.headers.get("authorization") or req.headers.get("Authorization")
     if not auth or not auth.lower().startswith("bearer "):
         return None
-    token = auth.split(None, 1)[1].strip()
+    raw = auth.split(None, 1)[1].strip()
+    try:
+        from app.core.security import decode_token
+        payload = decode_token(raw)
+        jti = payload.get("jti")
+        user_id = int(payload["sub"])
+    except Exception:
+        return None
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT user_id FROM user_token WHERE token = %s AND (expires_at IS NULL OR expires_at > NOW())", (token,))
-            r = cur.fetchone()
-            return r["user_id"] if r else None
+            cur.execute(
+                "SELECT 1 FROM user_token WHERE token = %s AND (expires_at IS NULL OR expires_at > NOW())",
+                (jti,),
+            )
+            return user_id if cur.fetchone() else None
 
 def _ensure_admin(user_id: int):
     with get_connection() as conn:
@@ -1617,4 +1627,293 @@ def update_package_llm_access(pkg_id: int, body: PackageLLMAccessUpdate, request
                 )
             conn.commit()
     return {"status": "ok"}
+
+
+# ─── Organization Types ────────────────────────────────────────────────────────
+
+class OrgTypeCreate(BaseModel):
+    name: str
+    description: str | None = None
+    icon: str | None = None
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class OrgTypeUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    icon: str | None = None
+    is_active: bool | None = None
+    sort_order: int | None = None
+
+
+@router.get("/organization-types")
+def list_org_types(request: Request):
+    """Admin: list all organization types (active and inactive)."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, description, icon, is_active, sort_order,
+                       created_at, updated_at
+                FROM organization_type
+                ORDER BY sort_order, name
+                """
+            )
+            rows = cur.fetchall()
+            return {"types": [dict(r) for r in rows]}
+
+
+@router.post("/organization-types")
+def create_org_type(body: OrgTypeCreate, request: Request):
+    """Admin: create a new organization type."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO organization_type (name, description, icon, is_active, sort_order)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id, name, description, icon, is_active, sort_order, created_at
+                    """,
+                    (body.name.strip(), body.description, body.icon, body.is_active, body.sort_order),
+                )
+            except Exception as exc:
+                if "unique" in str(exc).lower():
+                    raise HTTPException(status_code=400, detail=f"Organization type '{body.name}' already exists.")
+                raise
+            row = cur.fetchone()
+            conn.commit()
+            return dict(row)
+
+
+@router.put("/organization-types/{type_id}")
+def update_org_type(type_id: int, body: OrgTypeUpdate, request: Request):
+    """Admin: update an organization type."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    data = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not data:
+        return {"status": "ok"}
+    if "name" in data:
+        data["name"] = data["name"].strip()
+    set_parts = [f"{k} = %s" for k in data] + ["updated_at = NOW()"]
+    values = list(data.values()) + [type_id]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE organization_type SET {', '.join(set_parts)} WHERE id = %s RETURNING id",
+                values,
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Organization type not found")
+            conn.commit()
+    return {"status": "ok"}
+
+
+@router.delete("/organization-types/{type_id}")
+def delete_org_type(type_id: int, request: Request):
+    """Admin: delete an organization type (only if no users reference it)."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM users WHERE organization_type_id = %s",
+                (type_id,),
+            )
+            row = cur.fetchone()
+            if row and row["cnt"] > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot delete: {row['cnt']} user(s) registered under this type. Deactivate it instead.",
+                )
+            cur.execute("DELETE FROM organization_type WHERE id = %s RETURNING id", (type_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Organization type not found")
+            conn.commit()
+    return {"status": "ok"}
+
+
+# ─── Platform Module Management (Org types: corporate / gym / nutrition / others) ─
+
+class ModuleToggleRequest(BaseModel):
+    is_active: bool
+
+
+@router.get("/platform-modules")
+def list_platform_modules(request: Request):
+    """
+    List all org-type platform modules with their active status.
+    When is_active=False, the entire org type (e.g. Gym) is disabled platform-wide.
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    return org_repo.list_platform_modules()
+
+
+@router.put("/platform-modules/{module_key}")
+def toggle_platform_module(module_key: str, body: ModuleToggleRequest, request: Request):
+    """
+    Enable or disable an org-type module platform-wide.
+    Setting is_active=False immediately returns 503 on all endpoints for that org type.
+    module_key: 'corporate' | 'gym' | 'nutrition' | 'others'
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    row = org_repo.toggle_platform_module(module_key, body.is_active, uid)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Module '{module_key}' not found")
+    action = "enabled" if body.is_active else "disabled"
+    return {"status": "ok", "message": f"{row['display_name']} module {action}", "module": row}
+
+
+# ─── Organisation Admin Management ───────────────────────────────────────────
+
+class OrgAdminUpdate(BaseModel):
+    is_active: Optional[bool] = None
+    is_verified: Optional[bool] = None
+    plan: Optional[str] = None
+
+
+@router.get("/orgs")
+def list_orgs(
+    request: Request,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    org_type: Optional[str] = Query(None),
+    is_active: Optional[bool] = Query(None),
+):
+    """List all registered organisations. Filter by org_type or is_active."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    return org_repo.list_orgs(page, per_page, org_type, is_active)
+
+
+@router.get("/orgs/{org_id}")
+def get_org_detail(org_id: int, request: Request):
+    """Get full org profile for admin review."""
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    org = org_repo.get_org_by_id(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    return org
+
+
+@router.patch("/orgs/{org_id}")
+def update_org(org_id: int, body: OrgAdminUpdate, request: Request):
+    """
+    Admin update for an org: verify, change plan tier.
+    Use /block and /unblock endpoints for policy enforcement with reason tracking.
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    org = org_repo.get_org_by_id(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    fields = body.model_dump(exclude_none=True)
+    if fields:
+        org_repo.update_org_profile(org_id, fields)
+        # Log significant status changes to the audit trail
+        if "is_verified" in fields:
+            action = "verified" if fields["is_verified"] else "unverified"
+            org_repo.log_org_action(org_id, action, None, uid)
+        if "plan" in fields:
+            org_repo.log_org_action(org_id, "plan_changed", f"Plan set to: {fields['plan']}", uid)
+    return {"status": "ok"}
+
+
+# ─── Org Enforcement (Block / Unblock / Audit Log) ────────────────────────────
+
+class OrgBlockRequest(BaseModel):
+    reason: str  # Required — admin must document the violation reason
+
+
+class OrgUnblockRequest(BaseModel):
+    note: Optional[str] = None  # Optional note explaining reactivation
+
+
+@router.post("/orgs/{org_id}/block")
+def block_org(org_id: int, body: OrgBlockRequest, request: Request):
+    """
+    Block an organisation that is violating company policy or platform standards.
+    Reason is required and permanently logged in the audit trail.
+    All org-specific endpoints immediately return 403 once blocked.
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    if not body.reason or not body.reason.strip():
+        raise HTTPException(status_code=422, detail="A reason is required to block an organisation")
+    from app.org import repository as org_repo
+    org = org_repo.get_org_by_id(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    if not org["is_active"]:
+        raise HTTPException(status_code=409, detail="Organisation is already blocked/suspended")
+    row = org_repo.block_org(org_id, body.reason.strip(), uid)
+    return {
+        "status": "blocked",
+        "org_id": org_id,
+        "org_name": row["org_name"],
+        "reason": body.reason.strip(),
+        "suspended_at": row["suspended_at"],
+    }
+
+
+@router.post("/orgs/{org_id}/unblock")
+def unblock_org(org_id: int, body: OrgUnblockRequest, request: Request):
+    """
+    Reactivate a previously blocked organisation.
+    Clears the suspension and logs the unblock action with optional note.
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    org = org_repo.get_org_by_id(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    if org["is_active"]:
+        raise HTTPException(status_code=409, detail="Organisation is already active")
+    row = org_repo.unblock_org(org_id, body.note, uid)
+    return {
+        "status": "active",
+        "org_id": org_id,
+        "org_name": row["org_name"],
+    }
+
+
+@router.get("/orgs/{org_id}/actions")
+def org_action_log(org_id: int, request: Request):
+    """
+    Full audit trail of all admin enforcement actions taken against an organisation
+    (blocks, unblocks, verifications, plan changes). Newest first.
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    if not org_repo.get_org_by_id(org_id):
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    return org_repo.get_org_action_log(org_id)
 

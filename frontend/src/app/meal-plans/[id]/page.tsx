@@ -65,12 +65,34 @@ function downloadICS(plan: PlanDetail['plan'], slots: MealSlot[]) {
 // Types
 // ---------------------------------------------------------------------------
 interface MealSlot {
-  id: number; day_index: number; meal_type: string;
+  id: number; day_index: number; meal_type: string; sort_order?: number;
   recipe_id?: number; meal_name?: string; recipe_title?: string; recipe_key?: string;
-  meal_json?: { title?: string; calories_estimate?: number; ingredients_summary?: string[]; notes?: string };
+  meal_json?: { title?: string; calories_estimate?: number; ingredients_summary?: string[]; notes?: string; tags?: string[] };
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function getDayDate(weekStartDate: string | undefined, dayIndex: number): Date | null {
+  if (!weekStartDate) return null;
+  const d = new Date(weekStartDate + 'T00:00:00');
+  d.setDate(d.getDate() + dayIndex);
+  return d;
+}
+function fmtDayHeading(weekStartDate: string | undefined, dayIndex: number): string {
+  const d = getDayDate(weekStartDate, dayIndex);
+  if (!d) return DAY_NAMES[dayIndex];
+  return d.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+}
+function tagStyle(tag: string): { bg: string; color: string } {
+  const t = tag.toLowerCase();
+  if (/ferment|probiotic|enzyme|gut[\s-]?health/.test(t)) return { bg: 'rgba(74,222,128,0.12)', color: '#4ade80' };
+  if (/antioxidant|anti[\s-]?inflam|omega|selenium|potassium|mineral/.test(t)) return { bg: 'rgba(96,165,250,0.12)', color: '#60a5fa' };
+  if (/well[\s-]?cook|steam|baked|roast|low[\s-]?sodium|cooked/.test(t)) return { bg: 'rgba(251,191,36,0.12)', color: '#fbbf24' };
+  if (/high[\s-]?protein|protein|muscle|amino/.test(t)) return { bg: 'rgba(167,139,250,0.12)', color: '#a78bfa' };
+  if (/fiber|fibre|digest|prebiotic/.test(t)) return { bg: 'rgba(34,211,238,0.1)', color: '#22d3ee' };
+  return { bg: 'rgba(218,119,86,0.1)', color: 'var(--claude-orange)' };
 }
 interface PlanDetail {
-  plan: { id: number; name: string; description?: string; week_start_date?: string; servings: number; preferences_json?: { dietary?: string[]; allergies?: string[]; cuisine?: string }; };
+  plan: { id: number; name: string; description?: string; week_start_date?: string; servings: number; preferences_json?: { dietary?: string[]; allergies?: string[]; cuisine?: string; health_tagline?: string; extra_context?: string }; };
   slots: MealSlot[];
   daily_summary: { day_index: number; day_name: string; calories: number }[];
   shopping_list: string[];
@@ -182,6 +204,7 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
   const [swapLoading, setSwapLoading]   = useState(false);
   const [showShopping, setShowShopping] = useState(false);
   const [recipeModal, setRecipeModal]   = useState<RecipeModal | null>(null);
+  const [selectedDay, setSelectedDay]   = useState(0);
 
   const fetchDetail = async () => {
     const token = tok();
@@ -273,6 +296,10 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
           .print-only { display: none; }
           .print-ingredients { display: none; }
           .shopping-print { display: none; }
+          .screen-hide { display: none !important; }
+        }
+        @media print {
+          .screen-hide { display: block !important; visibility: visible !important; }
         }
       `}</style>
 
@@ -349,6 +376,133 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
           )}
         </div>
 
+        {/* ── Health banner + Day tabs + Card grid (screen only) ── */}
+        <div className="no-print" style={{ padding: '0 16px 28px' }}>
+
+          {/* Health tagline banner */}
+          {plan.preferences_json?.health_tagline && (
+            <div style={{ background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: 12, padding: '11px 16px', marginBottom: 18, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+              <span style={{ color: '#4ade80', fontSize: 15, flexShrink: 0, marginTop: 1 }}>★</span>
+              <span style={{ fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.6 }}>
+                {plan.preferences_json.health_tagline.includes(':') ? (
+                  <>
+                    <strong style={{ color: '#4ade80' }}>{plan.preferences_json.health_tagline.split(':')[0]}</strong>
+                    {': '}{plan.preferences_json.health_tagline.split(':').slice(1).join(':')}
+                  </>
+                ) : (
+                  <strong style={{ color: '#4ade80' }}>{plan.preferences_json.health_tagline}</strong>
+                )}
+              </span>
+            </div>
+          )}
+
+          {/* Day tabs */}
+          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 20, scrollbarWidth: 'none' }}>
+            {Array.from({ length: 7 }, (_, i) => {
+              const cal = daily_summary[i]?.calories;
+              const hasMeals = slots.some(s => s.day_index === i);
+              const active = selectedDay === i;
+              const d = getDayDate(plan.week_start_date, i);
+              const tabTop = d ? d.toLocaleDateString('en-GB', { weekday: 'short' }) : DAY_NAMES[i].slice(0, 3);
+              const tabMid = d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : DAY_NAMES[i];
+              return (
+                <button key={i} onClick={() => setSelectedDay(i)} style={{
+                  flexShrink: 0, padding: '8px 12px', borderRadius: 12,
+                  border: `1px solid ${active ? 'rgba(218,119,86,0.6)' : 'rgba(255,255,255,0.08)'}`,
+                  background: active ? 'var(--claude-orange)' : 'var(--bg-surface)',
+                  color: active ? '#fff' : 'var(--text-primary)',
+                  cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center', minWidth: 72,
+                  opacity: hasMeals ? 1 : 0.4,
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.02em' }}>{tabTop}</div>
+                  <div style={{ fontSize: 12, marginTop: 1, fontWeight: active ? 700 : 400 }}>{tabMid}</div>
+                  {cal > 0 && (
+                    <div style={{ fontSize: 9, marginTop: 3, color: active ? 'rgba(255,255,255,0.75)' : 'var(--claude-orange)', fontWeight: 600 }}>
+                      {cal} kcal
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Day heading */}
+          <div style={{ marginBottom: 16 }}>
+            <h2 style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 2px', letterSpacing: '-0.01em' }}>
+              {fmtDayHeading(plan.week_start_date, selectedDay)}
+            </h2>
+            {(daily_summary[selectedDay]?.calories ?? 0) > 0 && (
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                {daily_summary[selectedDay].calories} kcal total
+              </div>
+            )}
+          </div>
+
+          {/* Meal cards */}
+          {(() => {
+            const daySlots = slots
+              .filter(s => s.day_index === selectedDay)
+              .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+            if (daySlots.length === 0) return (
+              <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-tertiary)', fontSize: 13 }}>
+                No meals planned for this day
+              </div>
+            );
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
+                {daySlots.map(slot => {
+                  const mj = slot.meal_json;
+                  const title = slot.recipe_title ?? slot.meal_name ?? mj?.title ?? '';
+                  const kcal = mj?.calories_estimate;
+                  const notes = mj?.notes;
+                  const tags = mj?.tags ?? [];
+                  const hasRecipe = !!(slot.recipe_key || (mj?.ingredients_summary?.length ?? 0) > 0);
+                  const mealBg = MEAL_BG[slot.meal_type] ?? 'var(--bg-surface)';
+                  return (
+                    <div key={slot.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                      {/* Meal type header */}
+                      <div style={{ background: mealBg, padding: '8px 14px', borderBottom: '1px solid var(--border, rgba(255,255,255,0.06))' }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                          {MEAL_ICONS[slot.meal_type] ?? '🍽️'} {MEAL_LABEL[slot.meal_type] ?? slot.meal_type}
+                        </span>
+                        {MEAL_TIME_LABEL[slot.meal_type] && (
+                          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 8 }}>{MEAL_TIME_LABEL[slot.meal_type]}</span>
+                        )}
+                      </div>
+                      {/* Body */}
+                      <div style={{ padding: '14px 14px 10px', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.35 }}>{title || '—'}</div>
+                        {notes && <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.55 }}>{notes}</p>}
+                        {tags.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                            {tags.map((tag, ti) => {
+                              const ts = tagStyle(tag);
+                              return <span key={ti} style={{ fontSize: 10, fontWeight: 600, padding: '3px 9px', borderRadius: 20, background: ts.bg, color: ts.color }}>{tag}</span>;
+                            })}
+                          </div>
+                        )}
+                      </div>
+                      {/* Footer */}
+                      <div style={{ padding: '8px 14px', borderTop: '1px solid var(--border, rgba(255,255,255,0.06))', display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {kcal ? <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--claude-orange)' }}>{kcal} kcal</span> : <span />}
+                        <div style={{ flex: 1 }} />
+                        {hasRecipe && (
+                          <button onClick={() => openRecipeModal(slot)} style={{ background: 'rgba(218,119,86,0.12)', border: 'none', borderRadius: 6, color: 'var(--claude-orange)', fontSize: 11, cursor: 'pointer', padding: '5px 11px', fontFamily: 'inherit', fontWeight: 600 }}>
+                            View Recipe
+                          </button>
+                        )}
+                        <button onClick={() => setSwapModal({ slot })} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, color: 'var(--text-secondary)', fontSize: 11, cursor: 'pointer', padding: '5px 11px', fontFamily: 'inherit' }}>
+                          Swap
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+        </div>
+
         {/* ── Print-only header ── */}
         <div id="mp-printable">
         <div className="print-only" style={{ padding: '0 0 12px', borderBottom: '2px solid #000', marginBottom: 14 }}>
@@ -361,8 +515,8 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
           </div>
         </div>
 
-        {/* ── Main meal grid ── */}
-        <div style={{ padding: '0 16px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+        {/* ── Main meal grid (print only on screen) ── */}
+        <div className="screen-hide" style={{ padding: '0 16px', overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <table className="mp-table" style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 640 }}>
             <colgroup>
               <col style={{ width: 88 }} />
@@ -491,19 +645,6 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
         </div>
         </div>{/* end #mp-printable */}
 
-        {/* ── Legend / Notes (screen) ── */}
-        <div className="no-print" style={{ padding: '12px 16px 0', display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-          {MEAL_TYPES.map(m => (
-            <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-secondary)' }}>
-              <span>{MEAL_ICONS[m]}</span>
-              <span>{MEAL_LABEL[m]}</span>
-              <span style={{ fontSize: 10, color: 'var(--text-tertiary)' }}>· {MEAL_TIME_LABEL[m]}</span>
-            </div>
-          ))}
-          <div style={{ fontSize: 11, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-            Click <strong style={{ color: 'var(--claude-orange)' }}>View</strong> on any meal to see recipe · <strong style={{ color: 'var(--claude-orange)' }}>Swap</strong> to change a meal
-          </div>
-        </div>
       </div>
 
       {/* ── Recipe popup ── */}

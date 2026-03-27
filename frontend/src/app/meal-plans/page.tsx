@@ -21,12 +21,12 @@ interface Usage {
 interface Plan {
   id: number; name: string; description?: string; week_start_date?: string;
   servings: number; status: string; created_at: string; slot_count: number;
-  preferences_json?: { dietary?: string[]; allergies?: string[]; cuisine?: string };
+  preferences_json?: { dietary?: string[]; allergies?: string[]; cuisine?: string; health_tagline?: string };
 }
 interface Options { dietary: string[]; allergy: string[]; cuisine: string[]; }
 interface GenerateForm {
   name: string; dietary_preferences: string[]; allergies: string[];
-  servings: number; cuisine_preference: string;
+  servings: number; cuisine_preference: string; week_start_date: string;
 }
 interface BodyData {
   weight: string; weightUnit: 'kg' | 'lbs';
@@ -51,6 +51,12 @@ function toggle(arr: string[], val: string) {
 function fmtDate(iso: string) {
   try { return new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); }
   catch { return iso; }
+}
+function fmtWeekStart(iso: string) {
+  try {
+    const d = new Date(iso + 'T00:00:00');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  } catch { return iso.slice(5, 10); }
 }
 function getNotifyPref(id: number) {
   try { const v = localStorage.getItem(`meal_notify_${id}`); return v === null ? true : v === 'true'; } catch { return true; }
@@ -88,20 +94,24 @@ function NotifyToggle({ planId }: { planId: number }) {
 // ---------------------------------------------------------------------------
 // Plan card
 // ---------------------------------------------------------------------------
-function PlanCard({ plan, onView, onDelete }: { plan: Plan; onView: () => void; onDelete: (e: React.MouseEvent) => void }) {
+function PlanCard({ plan, onView, onDelete, onToggleStatus }: { plan: Plan; onView: () => void; onDelete: (e: React.MouseEvent) => void; onToggleStatus: (e: React.MouseEvent) => void }) {
   const dietary = plan.preferences_json?.dietary ?? [];
   const cuisine = plan.preferences_json?.cuisine;
+  const isArchived = plan.status === 'archived';
   return (
     <div
       onClick={onView}
-      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'border-color 0.2s' }}
-      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(218,119,86,0.4)'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.08)'; }}
+      style={{ background: 'var(--bg-surface)', border: `1px solid ${isArchived ? 'rgba(255,255,255,0.04)' : 'var(--border, rgba(255,255,255,0.08))'}`, borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'border-color 0.2s', opacity: isArchived ? 0.65 : 1 }}
+      onMouseEnter={e => { if (!isArchived) (e.currentTarget as HTMLElement).style.borderColor = 'rgba(218,119,86,0.4)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = isArchived ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.08)'; }}
     >
       <div style={{ padding: '16px 16px 12px', flex: 1 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', margin: 0, lineHeight: 1.3 }}>{plan.name}</h3>
-          <span style={{ fontSize: 11, color: 'var(--text-tertiary)', flexShrink: 0 }}>{fmtDate(plan.created_at)}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+            {isArchived && <span style={{ fontSize: 9, background: 'rgba(255,255,255,0.08)', color: 'var(--text-tertiary)', borderRadius: 4, padding: '2px 6px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Archived</span>}
+            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDate(plan.created_at)}</span>
+          </div>
         </div>
         {(dietary.length > 0 || cuisine) && (
           <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -112,12 +122,21 @@ function PlanCard({ plan, onView, onDelete }: { plan: Plan; onView: () => void; 
         <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
           <span>🍽️ {plan.slot_count} meals</span>
           <span>👤 {plan.servings} serving{plan.servings !== 1 ? 's' : ''}</span>
-          {plan.week_start_date && <span>📅 {plan.week_start_date.slice(5, 10)}</span>}
+          {plan.week_start_date && <span>📅 {fmtWeekStart(plan.week_start_date)}</span>}
         </div>
       </div>
       <div style={{ height: 1, background: 'var(--border, rgba(255,255,255,0.07))' }} />
       <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 6 }} onClick={e => e.stopPropagation()}>
         <NotifyToggle planId={plan.id} />
+        {/* Active/Archived toggle */}
+        <button onClick={onToggleStatus} title={isArchived ? 'Restore to active' : 'Archive plan'}
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: isArchived ? '#4ade80' : 'var(--text-tertiary)', padding: '4px 6px', borderRadius: 6, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+          {isArchived ? (
+            <><svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Restore</>
+          ) : (
+            <><svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg> Archive</>
+          )}
+        </button>
         <div style={{ flex: 1 }} />
         <button onClick={e => { e.stopPropagation(); onView(); }} style={{ background: 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 7, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>View</button>
         <button onClick={onDelete} title="Delete" style={{ background: 'rgba(224,107,107,0.1)', color: '#E06B6B', border: '1px solid rgba(224,107,107,0.25)', borderRadius: 7, padding: '6px 9px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
@@ -257,8 +276,9 @@ export default function MealPlansPage() {
   const [llmProviders, setLlmProviders]           = useState<{ id: string; label: string }[]>([]);
   const [selectedLlmProvider, setSelectedLlmProvider] = useState<string | null>(null);
 
+  const [statusTab, setStatusTab] = useState<'active' | 'archived'>('active');
   const [form, setForm] = useState<GenerateForm>({
-    name: '', dietary_preferences: [], allergies: [], servings: 2, cuisine_preference: '',
+    name: '', dietary_preferences: [], allergies: [], servings: 2, cuisine_preference: '', week_start_date: '',
   });
 
   // Load body data from localStorage on mount
@@ -273,18 +293,29 @@ export default function MealPlansPage() {
     try { const r = await fetch(`${API}/meal-plans/usage`, { headers: { Authorization: `Bearer ${token}` } }); if (r.ok) setUsage(await r.json()); } catch {}
   };
 
-  const fetchPlans = async () => {
+  const fetchPlans = async (status = 'active') => {
     const token = tok(); if (!token) { router.push('/'); return; }
     setLoading(true);
     try {
-      const r = await fetch(`${API}/meal-plans`, { headers: { Authorization: `Bearer ${token}` } });
+      const r = await fetch(`${API}/meal-plans?status=${status}`, { headers: { Authorization: `Bearer ${token}` } });
       if (r.status === 401) { router.push('/'); return; }
       setPlans((await r.json()).plans ?? []);
     } catch { setError('Failed to load meal plans'); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchPlans(); fetchUsage(); }, []);
+  const handleToggleStatus = async (plan: Plan, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newStatus = plan.status === 'archived' ? 'active' : 'archived';
+    await fetch(`${API}/meal-plans/${plan.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok()}` },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    await fetchPlans(statusTab);
+  };
+
+  useEffect(() => { fetchPlans(statusTab); fetchUsage(); }, [statusTab]);
 
   // Fetch LLM providers enabled for meal_plan feature
   useEffect(() => {
@@ -310,11 +341,12 @@ export default function MealPlansPage() {
     // NOTE: plan name is kept independent from the search text (prompt)
     setForm(f => ({
       ...f,
-      name: pendingForm?.name || '',          // do NOT pre-fill from searchText
+      name: pendingForm?.name || '',
       dietary_preferences: pendingForm?.dietary_preferences || [],
       allergies: pendingForm?.allergies || [],
       servings: pendingForm?.servings || 2,
       cuisine_preference: pendingForm?.cuisine_preference || '',
+      week_start_date: pendingForm?.week_start_date || '',
     }));
     setShowModal(true);
   };
@@ -353,6 +385,7 @@ export default function MealPlansPage() {
           allergies: genForm.allergies,
           servings: genForm.servings,
           cuisine_preference: genForm.cuisine_preference || undefined,
+          week_start_date: genForm.week_start_date || undefined,
           extra_context: searchText.trim() || undefined,
           body_lifestyle: (bodyData.weight || bodyData.goal || bodyData.activityLevel) ? bodyData : undefined,
           llm_provider: selectedLlmProvider || undefined,
@@ -407,9 +440,19 @@ export default function MealPlansPage() {
         <div style={{ maxWidth: 900, margin: '0 auto', padding: '28px 16px 20px' }}>
 
           {/* Page title */}
-          <div style={{ marginBottom: 20 }}>
+          <div style={{ marginBottom: 16 }}>
             <h1 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em' }}>Your Meal Plans</h1>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>AI-generated 7-day personalised meal plans</p>
+          </div>
+
+          {/* Active / Archived tabs */}
+          <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-surface)', borderRadius: 10, padding: 4, width: 'fit-content', border: '1px solid var(--border, rgba(255,255,255,0.08))' }}>
+            {(['active', 'archived'] as const).map(tab => (
+              <button key={tab} onClick={() => setStatusTab(tab)}
+                style={{ padding: '6px 16px', fontSize: 12, fontWeight: statusTab === tab ? 700 : 400, borderRadius: 7, border: 'none', cursor: 'pointer', background: statusTab === tab ? 'var(--claude-orange)' : 'transparent', color: statusTab === tab ? '#fff' : 'var(--text-secondary)', transition: 'background 0.15s,color 0.15s', textTransform: 'capitalize' }}>
+                {tab}
+              </button>
+            ))}
           </div>
 
           {/* Upgrade banner */}
@@ -473,7 +516,8 @@ export default function MealPlansPage() {
               {filteredPlans.map(plan => (
                 <PlanCard key={plan.id} plan={plan}
                   onView={() => router.push(`/meal-plans/${encodePlanId(plan.id)}`)}
-                  onDelete={e => handleDelete(plan.id, e)} />
+                  onDelete={e => handleDelete(plan.id, e)}
+                  onToggleStatus={e => handleToggleStatus(plan, e)} />
               ))}
             </div>
           )}
@@ -609,6 +653,14 @@ export default function MealPlansPage() {
                   </div>
                 </div>
               )}
+
+              {/* Start date */}
+              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
+                Plan start date <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>(any day — your plan runs 7 days from here)</span>
+                <input type="date" value={form.week_start_date}
+                  onChange={e => setForm(f => ({ ...f, week_start_date: e.target.value }))}
+                  style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+              </label>
 
               <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span>Servings per meal</span>

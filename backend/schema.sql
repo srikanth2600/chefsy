@@ -370,6 +370,49 @@ CREATE TABLE IF NOT EXISTS recipe_category_map (
   UNIQUE (recipe_id, category_id)
 );
 
+-- ─── Organization Types (admin-managed) ──────────────────────────────────────
+-- Stores the list of organization categories users can register as
+-- (e.g. Chef, Restaurant, Nutrition, GYM, Hospital). Managed via admin panel.
+CREATE TABLE IF NOT EXISTS organization_type (
+  id          SERIAL PRIMARY KEY,
+  name        TEXT NOT NULL UNIQUE,
+  description TEXT,
+  icon        TEXT,                       -- optional emoji/icon for UI
+  is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Seed default organization types (safe to re-run — conflicts are ignored)
+INSERT INTO organization_type (name, description, icon, sort_order) VALUES
+  ('Chef',        'Professional chef or culinary artist',          '👨‍🍳', 1),
+  ('Restaurant',  'Restaurant, café, or food court',               '🍽️',  2),
+  ('Nutrition',   'Nutritionist or dietitian practice',            '🥗',  3),
+  ('GYM',         'Gym, fitness centre, or personal trainer',      '💪',  4),
+  ('Hospital',    'Hospital, clinic, or healthcare provider',      '🏥',  5)
+ON CONFLICT (name) DO NOTHING;
+
+CREATE INDEX IF NOT EXISTS idx_org_type_active ON organization_type(is_active);
+
+-- ─── New columns on users table ───────────────────────────────────────────────
+-- account_type distinguishes Food Lovers (general) from Organizations
+ALTER TABLE IF EXISTS users
+  ADD COLUMN IF NOT EXISTS account_type TEXT NOT NULL DEFAULT 'general'
+    CHECK (account_type IN ('general', 'organization'));
+
+-- FK to organization_type when account_type = 'organization'
+ALTER TABLE IF EXISTS users
+  ADD COLUMN IF NOT EXISTS organization_type_id INTEGER
+    REFERENCES organization_type(id) ON DELETE SET NULL;
+
+-- Official/trading name of the organization (filled only for organization accounts)
+ALTER TABLE IF EXISTS users
+  ADD COLUMN IF NOT EXISTS organization_name TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_users_account_type     ON users(account_type);
+CREATE INDEX IF NOT EXISTS idx_users_org_type_id      ON users(organization_type_id);
+
 -- Meal Plan
 CREATE TABLE IF NOT EXISTS meal_plan (
   id               SERIAL PRIMARY KEY,
