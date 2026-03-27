@@ -469,6 +469,7 @@ export default function MealPlansPage() {
 
   useEffect(() => { fetchPlans(); fetchUsage(); }, []);
 
+
   // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -601,12 +602,20 @@ export default function MealPlansPage() {
     return true;
   });
 
+  // Sort: active first → by created_at DESC
+  const planSortFn = (a: Plan, b: Plan) => {
+    if (a.status === 'active' && b.status !== 'active') return -1;
+    if (a.status !== 'active' && b.status === 'active') return 1;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  };
+  const sortedFilteredPlans = [...filteredPlans].sort(planSortFn);
+
   const hasBodyProfile = !!(bodyData.weight || bodyData.goal || bodyData.activityLevel || bodyData.bloodPressure || bodyData.thyroid || bodyData.diabetes || bodyData.cholesterol || bodyData.otherConditions);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
 
-      {/* ── Scrollable middle ── */}
+      {/* ── Main scrollable content ── */}
       <div style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}>
         <div style={{ maxWidth: 900, margin: '0 auto', padding: '28px 16px 20px' }}>
 
@@ -674,7 +683,7 @@ export default function MealPlansPage() {
             </div>
           ) : (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))', gap: 14 }}>
-              {filteredPlans.map(plan => (
+              {sortedFilteredPlans.map(plan => (
                 <PlanCard key={plan.id} plan={plan}
                   onView={() => router.push(`/meal-plans/${encodePlanId(plan.id)}`)}
                   onSetDate={date => handleSetDate(plan.id, date)} />
@@ -682,7 +691,7 @@ export default function MealPlansPage() {
             </div>
           )}
         </div>
-      </div>
+      </div>{/* end main scrollable */}
 
       {/* ── Bottom search bar ── */}
       <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg)', padding: '12px 16px 16px' }}>

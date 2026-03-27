@@ -299,9 +299,10 @@ RULES:
 - Keep calories realistic (300-700 per slot). Do NOT repeat the same meal_name more than twice in the week.
 - ingredients_summary: list 3-6 main ingredients only
 - tags: 1-3 short descriptive tags per meal (e.g. "Fermented", "High Protein", "Anti-inflammatory", "Low Sodium", "Enzyme Rich", "Well Cooked", "Antioxidant", "High Fiber", "Omega-3 Rich")
-- health_tagline: always include if user has any health conditions in body profile; format as "Tailored for [conditions]: [key dietary rules joined by ·]"
-- intro: always include; 2-3 sentences describing the plan's goal, cuisine style, and key nutritional focus
-- tips: always include 3-5 practical, actionable tips relevant to the selected meal types, dietary preferences, or health conditions (e.g. hydration, meal timing, ingredient swaps, cooking methods)
+- health_tagline: always include if user has any health conditions in body profile; format as "Tailored for [conditions]: [key dietary rules joined by ·]"; keep it to ONE line, max 120 characters, no newlines
+- intro: always include; 2-3 sentences max, no newlines inside the string
+- tips: always include 3-5 practical, actionable tips; each tip must be a single string with no newlines
+- plan_name: use exactly "{req.get('name') or 'My 7-Day Meal Plan'}" — do NOT rename or reword it
 {f'- USER BODY PROFILE — CRITICAL: strictly follow all health conditions listed below when choosing meals:{chr(10)}{body_context}' if body_context else ''}"""
 
     user_message = f"Generate a 7-day meal plan. Dietary: {dietary}. Allergies: {allergies}. Cuisine: {cuisine}. Servings: {servings}."
@@ -320,7 +321,7 @@ RULES:
                 {"role": "user", "content": user_message},
             ],
             temperature=0.8,
-            max_tokens=4000,
+            max_tokens=7000,
         )
         raw = response.choices[0].message.content or ""
     except Exception as exc:
@@ -334,9 +335,10 @@ RULES:
         logger.error("Failed to parse meal plan JSON: %s", raw[:500])
         raise HTTPException(status_code=502, detail="AI returned invalid JSON for meal plan")
 
-    health_tagline: str | None = data.get("health_tagline") or None
-    intro: str | None = data.get("intro") or None
-    tips: list[str] = [t for t in (data.get("tips") or []) if isinstance(t, str) and t.strip()]
+    health_tagline: str | None = (data.get("health_tagline") or "").replace("\n", " ").strip() or None
+    intro: str | None = (data.get("intro") or "").replace("\n", " ").strip() or None
+    tips: list[str] = [(t or "").replace("\n", " ").strip() for t in (data.get("tips") or []) if isinstance(t, str) and (t or "").strip()]
+    llm_plan_name: str | None = (data.get("plan_name") or "").strip() or None
 
     slots_to_insert: list[dict[str, Any]] = []
     for day in data.get("days", []):
@@ -368,16 +370,18 @@ RULES:
                 "sort_order": i,
             })
 
-    return slots_to_insert, health_tagline, intro, tips
+    return slots_to_insert, health_tagline, intro, tips, llm_plan_name
 
 
 def generate_meal_plan(user_id: int, req: dict) -> dict:
     """
     AI-generate a full 7-day meal plan, persist it (new plan), and return detail.
     """
-    plan_name = req.get("name") or "AI Meal Plan"
+    user_name = (req.get("name") or "").strip()
     meal_types = req.get("meal_types") or ["breakfast", "lunch", "dinner"]
-    slots, health_tagline, intro, tips = _generate_slots(req, provider_id=req.get("llm_provider"))
+    slots, health_tagline, intro, tips, llm_plan_name = _generate_slots(req, provider_id=req.get("llm_provider"))
+    # Always honour user's name; only fall back to LLM suggestion when user left it blank
+    plan_name = user_name or llm_plan_name or "My 7-Day Meal Plan"
 
     preferences_json = {
         "dietary": req.get("dietary_preferences") or [],
@@ -410,7 +414,7 @@ def generate_meal_plan(user_id: int, req: dict) -> dict:
 def regenerate_meal_plan(plan_id: int, req: dict) -> dict:
     """Re-generate slots for an existing plan (replaces all slots)."""
     repository.delete_slots_for_plan(plan_id)
-    slots, health_tagline, intro, tips = _generate_slots(req, provider_id=req.get("llm_provider"))
+    slots, health_tagline, intro, tips, _ = _generate_slots(req, provider_id=req.get("llm_provider"))
     repository.bulk_insert_slots(plan_id, slots)
     # Update preferences_json with regenerated LLM fields
     plan = repository.get_meal_plan_by_id(plan_id)

@@ -434,7 +434,7 @@ CREATE TABLE IF NOT EXISTS meal_plan_slot (
   id           SERIAL PRIMARY KEY,
   meal_plan_id INTEGER NOT NULL REFERENCES meal_plan(id) ON DELETE CASCADE,
   day_index    SMALLINT NOT NULL CHECK (day_index BETWEEN 0 AND 6),
-  meal_type    TEXT NOT NULL CHECK (meal_type IN ('breakfast','lunch','dinner','snack')),
+  meal_type    TEXT NOT NULL CHECK (meal_type IN ('breakfast','lunch','dinner','snack','early_morning','mid_breakfast','evening_snack','bedtime','pre_workout','post_workout')),
   recipe_id    INTEGER REFERENCES recipe_master(id) ON DELETE SET NULL,
   meal_name    TEXT,
   meal_json    JSONB,
