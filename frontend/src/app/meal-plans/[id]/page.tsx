@@ -8,17 +8,31 @@ const tok = () => { try { return localStorage.getItem('gharka_token') || ''; } c
 
 const DAY_NAMES  = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_SHORT  = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const MEAL_TYPES = ['breakfast', 'lunch', 'dinner'];
-const MEAL_ICONS: Record<string, string> = { breakfast: '🌅', lunch: '☀️', dinner: '🌙' };
-const MEAL_TIMES: Record<string, { h: number; m: number }> = {
-  breakfast: { h: 8, m: 0 }, lunch: { h: 12, m: 0 }, dinner: { h: 19, m: 0 },
+const MEAL_TYPES = ['early_morning', 'breakfast', 'mid_breakfast', 'lunch', 'evening_snack', 'dinner', 'bedtime', 'pre_workout', 'post_workout'];
+const MEAL_ICONS: Record<string, string> = {
+  early_morning: '🌄', breakfast: '🌅', mid_breakfast: '🍎',
+  lunch: '☀️', evening_snack: '☕', dinner: '🌙',
+  bedtime: '🌙', pre_workout: '💪', post_workout: '🥤',
 };
-const MEAL_LABEL: Record<string, string> = { breakfast: 'Breakfast', lunch: 'Lunch', dinner: 'Dinner' };
-const MEAL_TIME_LABEL: Record<string, string> = { breakfast: '8:00 AM', lunch: '12:00 PM', dinner: '7:00 PM' };
+const MEAL_TIMES: Record<string, { h: number; m: number }> = {
+  early_morning: { h: 6, m: 30 }, breakfast: { h: 8, m: 0 }, mid_breakfast: { h: 10, m: 30 },
+  lunch: { h: 12, m: 0 }, evening_snack: { h: 17, m: 0 }, dinner: { h: 19, m: 0 },
+  bedtime: { h: 21, m: 30 }, pre_workout: { h: 6, m: 0 }, post_workout: { h: 8, m: 0 },
+};
+const MEAL_LABEL: Record<string, string> = {
+  early_morning: 'Early Morning', breakfast: 'Breakfast', mid_breakfast: 'Mid-Morning',
+  lunch: 'Lunch', evening_snack: 'Evening Snack', dinner: 'Dinner',
+  bedtime: 'Bedtime', pre_workout: 'Pre-Workout', post_workout: 'Post-Workout',
+};
+const MEAL_TIME_LABEL: Record<string, string> = {
+  early_morning: '6:30 AM', breakfast: '8:00 AM', mid_breakfast: '10:30 AM',
+  lunch: '12:00 PM', evening_snack: '5:00 PM', dinner: '7:00 PM',
+  bedtime: '9:30 PM', pre_workout: '6:00 AM', post_workout: '8:00 AM',
+};
 const MEAL_BG: Record<string, string> = {
-  breakfast: 'rgba(251,191,36,0.04)',
-  lunch:     'rgba(96,165,250,0.04)',
-  dinner:    'rgba(167,139,250,0.04)',
+  early_morning: 'rgba(251,191,36,0.04)', breakfast: 'rgba(251,191,36,0.04)', mid_breakfast: 'rgba(74,222,128,0.04)',
+  lunch: 'rgba(96,165,250,0.04)', evening_snack: 'rgba(251,191,36,0.04)', dinner: 'rgba(167,139,250,0.04)',
+  bedtime: 'rgba(167,139,250,0.04)', pre_workout: 'rgba(34,211,238,0.04)', post_workout: 'rgba(34,211,238,0.04)',
 };
 
 // ---------------------------------------------------------------------------
@@ -92,7 +106,7 @@ function tagStyle(tag: string): { bg: string; color: string } {
   return { bg: 'rgba(218,119,86,0.1)', color: 'var(--claude-orange)' };
 }
 interface PlanDetail {
-  plan: { id: number; name: string; description?: string; week_start_date?: string; servings: number; preferences_json?: { dietary?: string[]; allergies?: string[]; cuisine?: string; health_tagline?: string; extra_context?: string }; };
+  plan: { id: number; name: string; description?: string; week_start_date?: string; servings: number; preferences_json?: { dietary?: string[]; allergies?: string[]; cuisine?: string; health_tagline?: string; intro?: string; tips?: string[]; extra_context?: string }; };
   slots: MealSlot[];
   daily_summary: { day_index: number; day_name: string; calories: number }[];
   shopping_list: string[];
@@ -205,6 +219,8 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
   const [showShopping, setShowShopping] = useState(false);
   const [recipeModal, setRecipeModal]   = useState<RecipeModal | null>(null);
   const [selectedDay, setSelectedDay]   = useState(0);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [newStartDate, setNewStartDate]     = useState('');
 
   const fetchDetail = async () => {
     const token = tok();
@@ -240,6 +256,20 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
       setDetail(await res.json());
     } catch (e: any) { setError(e.message); }
     finally { setRegenerating(false); }
+  };
+
+  const handleSetStartDate = async (dateStr: string) => {
+    if (!dateStr || !planId) return;
+    try {
+      const res = await fetch(`${API}/meal-plans/${planId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok()}` },
+        body: JSON.stringify({ week_start_date: dateStr }),
+      });
+      if (!res.ok) throw new Error('Failed to update date');
+      setShowDatePicker(false);
+      fetchDetail();
+    } catch (e: any) { setError(e.message); }
   };
 
   const handleSwap = async (slotId: number, mealName: string) => {
@@ -301,6 +331,15 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
         @media print {
           .screen-hide { display: block !important; visibility: visible !important; }
         }
+        .meal-grid { display: grid; grid-template-columns: 1fr 1fr; }
+        @media (max-width: 600px) { .meal-grid { grid-template-columns: 1fr; } }
+        .day-tabs-row { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+        .day-tabs-row::-webkit-scrollbar { display: none; }
+        .mp-action-row { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+        @media (max-width: 480px) {
+          .mp-action-row button { padding: 6px 9px !important; font-size: 11px !important; }
+          .mp-top-row { flex-direction: column; }
+        }
       `}</style>
 
       {/* ── Scrollable body ── */}
@@ -314,7 +353,7 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
             Back to Meal Plans
           </button>
 
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          <div className="mp-top-row" style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <div style={{ minWidth: 0 }}>
               <h1 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 6px', letterSpacing: '-0.01em' }}>{plan.name}</h1>
               {plan.preferences_json && (
@@ -334,10 +373,32 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
             </div>
 
             {/* Action buttons */}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flexShrink: 0 }}>
+            <div className="mp-action-row" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flexShrink: 0 }}>
+              {/* Set start date */}
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => { setNewStartDate(plan.week_start_date ?? ''); setShowDatePicker(v => !v); }}
+                  style={{ background: plan.week_start_date ? 'rgba(96,165,250,0.1)' : 'var(--bg-surface)', border: `1px solid ${plan.week_start_date ? 'rgba(96,165,250,0.4)' : 'var(--border)'}`, color: plan.week_start_date ? '#60a5fa' : 'var(--text-secondary)', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  📅 {plan.week_start_date ? fmtDayHeading(plan.week_start_date, 0).split(',')[0] : 'Set Dates'}
+                </button>
+                {showDatePicker && (
+                  <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 12, padding: '14px 16px', minWidth: 240, boxShadow: '0 8px 32px rgba(0,0,0,0.4)', zIndex: 300 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                      Plan start date <span style={{ fontWeight: 400, color: 'var(--text-tertiary)', fontSize: 11 }}>(day 1 of 7)</span>
+                    </div>
+                    <input type="date" value={newStartDate}
+                      onChange={e => setNewStartDate(e.target.value)}
+                      style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button onClick={() => setShowDatePicker(false)} style={{ flex: 1, padding: '7px 0', background: 'transparent', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 7, color: 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                      <button onClick={() => handleSetStartDate(newStartDate)} disabled={!newStartDate} style={{ flex: 2, padding: '7px 0', background: newStartDate ? 'var(--claude-orange)' : 'rgba(218,119,86,0.4)', border: 'none', borderRadius: 7, color: '#fff', fontSize: 12, fontWeight: 600, cursor: newStartDate ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>Apply Dates</button>
+                    </div>
+                  </div>
+                )}
+              </div>
               <button onClick={() => downloadICS(plan, slots)}
                 style={{ background: 'var(--bg-surface)', border: '1px solid var(--border)', color: 'var(--text-primary)', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                📅 Calendar
+                🗓 Calendar
               </button>
               <button onClick={() => setShowShopping(s => !s)}
                 style={{ background: showShopping ? 'rgba(218,119,86,0.15)' : 'var(--bg-surface)', border: `1px solid ${showShopping ? 'rgba(218,119,86,0.4)' : 'var(--border)'}`, color: showShopping ? 'var(--claude-orange)' : 'var(--text-primary)', borderRadius: 8, padding: '7px 12px', fontSize: 12, cursor: 'pointer' }}>
@@ -379,6 +440,13 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
         {/* ── Health banner + Day tabs + Card grid (screen only) ── */}
         <div className="no-print" style={{ padding: '0 16px 28px' }}>
 
+          {/* Intro paragraph */}
+          {plan.preferences_json?.intro && (
+            <div style={{ background: 'var(--bg-surface)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 12, padding: '14px 18px', marginBottom: 14 }}>
+              <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.75 }}>{plan.preferences_json.intro}</p>
+            </div>
+          )}
+
           {/* Health tagline banner */}
           {plan.preferences_json?.health_tagline && (
             <div style={{ background: 'rgba(74,222,128,0.06)', border: '1px solid rgba(74,222,128,0.2)', borderRadius: 12, padding: '11px 16px', marginBottom: 18, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
@@ -397,110 +465,138 @@ export default function MealPlanDetailPage({ params }: { params: Promise<{ id: s
           )}
 
           {/* Day tabs */}
-          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 20, scrollbarWidth: 'none' }}>
+          <div className="day-tabs-row" style={{ marginBottom: 20 }}>
             {Array.from({ length: 7 }, (_, i) => {
-              const cal = daily_summary[i]?.calories;
               const hasMeals = slots.some(s => s.day_index === i);
               const active = selectedDay === i;
               const d = getDayDate(plan.week_start_date, i);
-              const tabTop = d ? d.toLocaleDateString('en-GB', { weekday: 'short' }) : DAY_NAMES[i].slice(0, 3);
-              const tabMid = d ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : DAY_NAMES[i];
+              const label = d
+                ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })
+                : DAY_NAMES[i];
               return (
                 <button key={i} onClick={() => setSelectedDay(i)} style={{
-                  flexShrink: 0, padding: '8px 12px', borderRadius: 12,
-                  border: `1px solid ${active ? 'rgba(218,119,86,0.6)' : 'rgba(255,255,255,0.08)'}`,
-                  background: active ? 'var(--claude-orange)' : 'var(--bg-surface)',
-                  color: active ? '#fff' : 'var(--text-primary)',
-                  cursor: 'pointer', transition: 'all 0.15s', textAlign: 'center', minWidth: 72,
-                  opacity: hasMeals ? 1 : 0.4,
+                  flexShrink: 0, padding: '8px 16px', borderRadius: 22,
+                  border: `1px solid ${active ? 'rgba(74,222,128,0.55)' : 'rgba(255,255,255,0.1)'}`,
+                  background: active ? 'rgba(74,222,128,0.14)' : 'var(--bg-surface)',
+                  color: active ? '#4ade80' : hasMeals ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                  fontWeight: active ? 700 : 500, fontSize: 13,
+                  cursor: 'pointer', transition: 'all 0.15s', whiteSpace: 'nowrap',
                 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.02em' }}>{tabTop}</div>
-                  <div style={{ fontSize: 12, marginTop: 1, fontWeight: active ? 700 : 400 }}>{tabMid}</div>
-                  {cal > 0 && (
-                    <div style={{ fontSize: 9, marginTop: 3, color: active ? 'rgba(255,255,255,0.75)' : 'var(--claude-orange)', fontWeight: 600 }}>
-                      {cal} kcal
-                    </div>
-                  )}
+                  {label}
                 </button>
               );
             })}
           </div>
 
-          {/* Day heading */}
-          <div style={{ marginBottom: 16 }}>
-            <h2 style={{ fontSize: 17, fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 2px', letterSpacing: '-0.01em' }}>
-              {fmtDayHeading(plan.week_start_date, selectedDay)}
-            </h2>
-            {(daily_summary[selectedDay]?.calories ?? 0) > 0 && (
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
-                {daily_summary[selectedDay].calories} kcal total
+          {/* Day header — coloured band */}
+          {(() => {
+            const summary = daily_summary[selectedDay];
+            const dayLabel = fmtDayHeading(plan.week_start_date, selectedDay);
+            const dayTheme = summary?.day_name && summary.day_name !== DAY_NAMES[selectedDay] ? summary.day_name : null;
+            const kcal = summary?.calories ?? 0;
+            return (
+              <div style={{ background: 'rgba(74,222,128,0.07)', borderLeft: '4px solid rgba(74,222,128,0.5)', borderRadius: '0 10px 10px 0', padding: '14px 18px', marginBottom: 20 }}>
+                <div style={{ fontSize: 20, fontWeight: 800, color: '#4ade80', letterSpacing: '-0.01em' }}>{dayLabel}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 2 }}>
+                  {dayTheme && <span style={{ fontSize: 13, color: '#4ade80', opacity: 0.8 }}>{dayTheme}</span>}
+                  {kcal > 0 && <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{kcal} kcal total</span>}
+                </div>
               </div>
-            )}
-          </div>
+            );
+          })()}
 
-          {/* Meal cards */}
+          {/* Meal boxes — 2-col grid */}
           {(() => {
             const daySlots = slots
               .filter(s => s.day_index === selectedDay)
-              .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+              .sort((a, b) => {
+                const order = MEAL_TYPES.indexOf(a.meal_type) - MEAL_TYPES.indexOf(b.meal_type);
+                return order !== 0 ? order : (a.sort_order ?? 0) - (b.sort_order ?? 0);
+              });
             if (daySlots.length === 0) return (
               <div style={{ textAlign: 'center', padding: '48px 0', color: 'var(--text-tertiary)', fontSize: 13 }}>
                 No meals planned for this day
               </div>
             );
             return (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))', gap: 14 }}>
-                {daySlots.map(slot => {
+              <div className="meal-grid" style={{ border: '1px solid rgba(255,255,255,0.08)', borderRadius: 14, overflow: 'hidden' }}>
+                {daySlots.map((slot, idx) => {
                   const mj = slot.meal_json;
                   const title = slot.recipe_title ?? slot.meal_name ?? mj?.title ?? '';
                   const kcal = mj?.calories_estimate;
                   const notes = mj?.notes;
                   const tags = mj?.tags ?? [];
                   const hasRecipe = !!(slot.recipe_key || (mj?.ingredients_summary?.length ?? 0) > 0);
-                  const mealBg = MEAL_BG[slot.meal_type] ?? 'var(--bg-surface)';
+                  const label = MEAL_LABEL[slot.meal_type] ?? slot.meal_type;
+                  const timeLabel = MEAL_TIME_LABEL[slot.meal_type];
+                  // borders: right on even index (left col), bottom on all except last two items
+                  const isOdd = idx % 2 === 0; // left column
+                  const totalRows = Math.ceil(daySlots.length / 2);
+                  const myRow = Math.floor(idx / 2);
+                  const isLastRow = myRow === totalRows - 1;
                   return (
-                    <div key={slot.id} style={{ background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.08))', borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                      {/* Meal type header */}
-                      <div style={{ background: mealBg, padding: '8px 14px', borderBottom: '1px solid var(--border, rgba(255,255,255,0.06))' }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                          {MEAL_ICONS[slot.meal_type] ?? '🍽️'} {MEAL_LABEL[slot.meal_type] ?? slot.meal_type}
+                    <div key={slot.id} style={{
+                      padding: '20px 20px 16px',
+                      borderRight: isOdd ? '1px solid rgba(255,255,255,0.07)' : 'none',
+                      borderBottom: isLastRow ? 'none' : '1px solid rgba(255,255,255,0.07)',
+                      display: 'flex', flexDirection: 'column', gap: 10,
+                      background: 'var(--bg-surface)',
+                    }}>
+                      {/* Meal type label row — label · time · kcal · Recipe · Swap */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.1em', flex: 1, minWidth: 0 }}>
+                          {label}
+                          {timeLabel && <span style={{ fontWeight: 400, marginLeft: 5, letterSpacing: 0, textTransform: 'none', fontSize: 10 }}>· {timeLabel}</span>}
                         </span>
-                        {MEAL_TIME_LABEL[slot.meal_type] && (
-                          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 8 }}>{MEAL_TIME_LABEL[slot.meal_type]}</span>
-                        )}
-                      </div>
-                      {/* Body */}
-                      <div style={{ padding: '14px 14px 10px', flex: 1, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.35 }}>{title || '—'}</div>
-                        {notes && <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.55 }}>{notes}</p>}
-                        {tags.length > 0 && (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                            {tags.map((tag, ti) => {
-                              const ts = tagStyle(tag);
-                              return <span key={ti} style={{ fontSize: 10, fontWeight: 600, padding: '3px 9px', borderRadius: 20, background: ts.bg, color: ts.color }}>{tag}</span>;
-                            })}
-                          </div>
-                        )}
-                      </div>
-                      {/* Footer */}
-                      <div style={{ padding: '8px 14px', borderTop: '1px solid var(--border, rgba(255,255,255,0.06))', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {kcal ? <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--claude-orange)' }}>{kcal} kcal</span> : <span />}
-                        <div style={{ flex: 1 }} />
+                        {kcal && <span style={{ fontSize: 10, fontWeight: 600, color: 'var(--claude-orange)', whiteSpace: 'nowrap', flexShrink: 0 }}>{kcal} kcal</span>}
                         {hasRecipe && (
-                          <button onClick={() => openRecipeModal(slot)} style={{ background: 'rgba(218,119,86,0.12)', border: 'none', borderRadius: 6, color: 'var(--claude-orange)', fontSize: 11, cursor: 'pointer', padding: '5px 11px', fontFamily: 'inherit', fontWeight: 600 }}>
-                            View Recipe
+                          <button onClick={() => openRecipeModal(slot)} style={{ background: 'rgba(218,119,86,0.12)', border: 'none', borderRadius: 5, color: 'var(--claude-orange)', fontSize: 10, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit', fontWeight: 600, flexShrink: 0 }}>
+                            Recipe
                           </button>
                         )}
-                        <button onClick={() => setSwapModal({ slot })} style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 6, color: 'var(--text-secondary)', fontSize: 11, cursor: 'pointer', padding: '5px 11px', fontFamily: 'inherit' }}>
+                        <button onClick={() => setSwapModal({ slot })} style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 5, color: 'var(--text-secondary)', fontSize: 10, cursor: 'pointer', padding: '3px 8px', fontFamily: 'inherit', flexShrink: 0 }}>
                           Swap
                         </button>
                       </div>
+
+                      {/* Meal name */}
+                      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>{title || '—'}</div>
+
+                      {/* Notes/description */}
+                      {notes && <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: 0, lineHeight: 1.6, flexGrow: 1 }}>{notes}</p>}
+
+                      {/* Tags */}
+                      {tags.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {tags.map((tag, ti) => {
+                            const ts = tagStyle(tag);
+                            return <span key={ti} style={{ fontSize: 10, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: ts.bg, color: ts.color }}>{tag}</span>;
+                          })}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
             );
           })()}
+
+          {/* Tips & suggestions */}
+          {(plan.preferences_json?.tips ?? []).length > 0 && (
+            <div style={{ marginTop: 24, background: 'var(--bg-surface)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 14, padding: '18px 20px' }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 16 }}>💡</span> Tips &amp; Suggestions
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {(plan.preferences_json!.tips as string[]).map((tip, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                    <span style={{ flexShrink: 0, width: 22, height: 22, borderRadius: '50%', background: 'rgba(218,119,86,0.15)', color: 'var(--claude-orange)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', marginTop: 1 }}>{i + 1}</span>
+                    <p style={{ margin: 0, fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.65 }}>{tip}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Print-only header ── */}

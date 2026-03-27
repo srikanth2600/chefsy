@@ -225,6 +225,34 @@ def _generate_slots(req: dict, provider_id: str | None = None) -> tuple[list[dic
         body_lines.append(f"Activity Level: {body['activityLevel']}")
     if body.get("goal"):
         body_lines.append(f"Health Goal: {body['goal']}")
+    # Health conditions
+    bp_map = {"high": "High Blood Pressure (Hypertension) — avoid high sodium, processed foods", "low": "Low Blood Pressure (Hypotension) — ensure adequate salt, iron-rich foods"}
+    if body.get("bloodPressure") and bp_map.get(body["bloodPressure"]):
+        body_lines.append(f"Blood Pressure: {bp_map[body['bloodPressure']]}")
+    thyroid_map = {
+        "hypothyroid": "Hypothyroidism — avoid raw goitrogenic vegetables (broccoli, cabbage, kale raw), boost selenium & iodine",
+        "hyperthyroid": "Hyperthyroidism — limit iodine-rich foods, use anti-inflammatory spices",
+        "medication": "Thyroid medication — avoid soy & cruciferous raw veggies that affect absorption",
+    }
+    if body.get("thyroid") and thyroid_map.get(body["thyroid"]):
+        body_lines.append(f"Thyroid: {thyroid_map[body['thyroid']]}")
+    diabetes_map = {
+        "type1": "Type 1 Diabetes — low GI foods, consistent carb intake, avoid sugar spikes",
+        "type2": "Type 2 Diabetes — low GI, high fiber, limit refined carbs & sugary foods",
+        "prediabetic": "Pre-diabetic — low GI, high fiber, portion control, avoid added sugars",
+        "gestational": "Gestational Diabetes — low GI, balanced meals, avoid fruit juices & refined carbs",
+    }
+    if body.get("diabetes") and diabetes_map.get(body["diabetes"]):
+        body_lines.append(f"Diabetes: {diabetes_map[body['diabetes']]}")
+    cholesterol_map = {
+        "high": "High Cholesterol — avoid trans fats & saturated fats, boost omega-3, soluble fiber (oats, lentils)",
+        "low": "Low Cholesterol — include healthy fats (avocado, nuts, olive oil)",
+        "medication": "Cholesterol medication — avoid grapefruit, high saturated fats",
+    }
+    if body.get("cholesterol") and cholesterol_map.get(body["cholesterol"]):
+        body_lines.append(f"Cholesterol: {cholesterol_map[body['cholesterol']]}")
+    if body.get("otherConditions"):
+        body_lines.append(f"Other conditions: {body['otherConditions']} — adapt meals accordingly")
     body_context = "\n".join(body_lines) if body_lines else ""
 
     system_prompt = f"""You are a professional nutrition-aware meal planner.
@@ -233,6 +261,7 @@ Return ONLY a valid JSON object — no markdown, no code fences, no commentary.
 OUTPUT SCHEMA:
 {{
   "plan_name": "string",
+  "intro": "2-3 sentence intro: describe the plan's overall goal, philosophy, and key nutritional focus",
   "health_tagline": "concise health summary if user mentioned health conditions (e.g. 'Tailored for thyroid + high BP: Low sodium · High potassium'), else null",
   "days": [
     {{
@@ -250,12 +279,18 @@ OUTPUT SCHEMA:
         }}
       ]
     }}
+  ],
+  "tips": [
+    "Practical tip 1 based on the meal types, dietary preferences or health conditions",
+    "Practical tip 2",
+    "Practical tip 3"
   ]
 }}
 
 RULES:
 - Generate exactly 7 days (day_index 0=Monday through 6=Sunday)
-- Each day must include these meal types: {', '.join(meal_types)}
+- Each day must include EXACTLY these meal types (no more, no less): {', '.join(meal_types)}
+- Do NOT add any meal type not in the list above. Do NOT omit any meal type from the list above.
 - recipe_key: provide a kebab-case slug hint matching a recipe name (e.g. "dal-makhani", "greek-salad"), or null if unknown
 - dietary preferences: {dietary}
 - allergies/avoid: {allergies}
@@ -264,10 +299,14 @@ RULES:
 - Keep calories realistic (300-700 per slot). Do NOT repeat the same meal_name more than twice in the week.
 - ingredients_summary: list 3-6 main ingredients only
 - tags: 1-3 short descriptive tags per meal (e.g. "Fermented", "High Protein", "Anti-inflammatory", "Low Sodium", "Enzyme Rich", "Well Cooked", "Antioxidant", "High Fiber", "Omega-3 Rich")
-- health_tagline: only include if user mentions a health condition; format as "Tailored for [condition]: [key dietary rules joined by ·]"
-{f'- USER BODY PROFILE (use to calibrate calories and macros appropriately):{chr(10)}{body_context}' if body_context else ''}"""
+- health_tagline: always include if user has any health conditions in body profile; format as "Tailored for [conditions]: [key dietary rules joined by ·]"
+- intro: always include; 2-3 sentences describing the plan's goal, cuisine style, and key nutritional focus
+- tips: always include 3-5 practical, actionable tips relevant to the selected meal types, dietary preferences, or health conditions (e.g. hydration, meal timing, ingredient swaps, cooking methods)
+{f'- USER BODY PROFILE — CRITICAL: strictly follow all health conditions listed below when choosing meals:{chr(10)}{body_context}' if body_context else ''}"""
 
     user_message = f"Generate a 7-day meal plan. Dietary: {dietary}. Allergies: {allergies}. Cuisine: {cuisine}. Servings: {servings}."
+    if body_context:
+        user_message += f"\n\nUser health profile to follow strictly:\n{body_context}"
     if extra_context:
         user_message += f"\n\nAdditional user instructions: {extra_context}"
 
@@ -296,6 +335,8 @@ RULES:
         raise HTTPException(status_code=502, detail="AI returned invalid JSON for meal plan")
 
     health_tagline: str | None = data.get("health_tagline") or None
+    intro: str | None = data.get("intro") or None
+    tips: list[str] = [t for t in (data.get("tips") or []) if isinstance(t, str) and t.strip()]
 
     slots_to_insert: list[dict[str, Any]] = []
     for day in data.get("days", []):
@@ -327,7 +368,7 @@ RULES:
                 "sort_order": i,
             })
 
-    return slots_to_insert, health_tagline
+    return slots_to_insert, health_tagline, intro, tips
 
 
 def generate_meal_plan(user_id: int, req: dict) -> dict:
@@ -336,7 +377,7 @@ def generate_meal_plan(user_id: int, req: dict) -> dict:
     """
     plan_name = req.get("name") or "AI Meal Plan"
     meal_types = req.get("meal_types") or ["breakfast", "lunch", "dinner"]
-    slots, health_tagline = _generate_slots(req, provider_id=req.get("llm_provider"))
+    slots, health_tagline, intro, tips = _generate_slots(req, provider_id=req.get("llm_provider"))
 
     preferences_json = {
         "dietary": req.get("dietary_preferences") or [],
@@ -347,6 +388,10 @@ def generate_meal_plan(user_id: int, req: dict) -> dict:
     }
     if health_tagline:
         preferences_json["health_tagline"] = health_tagline
+    if intro:
+        preferences_json["intro"] = intro
+    if tips:
+        preferences_json["tips"] = tips
 
     plan_id = repository.create_meal_plan(user_id, {
         "name": plan_name,
@@ -365,14 +410,19 @@ def generate_meal_plan(user_id: int, req: dict) -> dict:
 def regenerate_meal_plan(plan_id: int, req: dict) -> dict:
     """Re-generate slots for an existing plan (replaces all slots)."""
     repository.delete_slots_for_plan(plan_id)
-    slots, health_tagline = _generate_slots(req, provider_id=req.get("llm_provider"))
+    slots, health_tagline, intro, tips = _generate_slots(req, provider_id=req.get("llm_provider"))
     repository.bulk_insert_slots(plan_id, slots)
-    # Update health_tagline in preferences_json if returned
-    if health_tagline:
-        plan = repository.get_meal_plan_by_id(plan_id)
-        if plan:
-            prefs = plan.get("preferences_json") or {}
+    # Update preferences_json with regenerated LLM fields
+    plan = repository.get_meal_plan_by_id(plan_id)
+    if plan:
+        prefs = plan.get("preferences_json") or {}
+        if health_tagline:
             prefs["health_tagline"] = health_tagline
+        if intro:
+            prefs["intro"] = intro
+        if tips:
+            prefs["tips"] = tips
+        if health_tagline or intro or tips:
             repository.update_meal_plan(plan_id, {"preferences_json_raw": prefs})
     logger.info("Regenerated slots for plan_id=%d: %d slots", plan_id, len(slots))
     return get_plan_detail(plan_id)

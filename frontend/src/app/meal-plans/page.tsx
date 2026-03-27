@@ -32,11 +32,18 @@ interface BodyData {
   weight: string; weightUnit: 'kg' | 'lbs';
   height: string; heightUnit: 'cm' | 'ft';
   dob: string; gender: string; activityLevel: string; goal: string;
+  // health conditions
+  bloodPressure: string;   // '' | 'high' | 'low'
+  thyroid: string;         // '' | 'hypothyroid' | 'hyperthyroid' | 'medication'
+  diabetes: string;        // '' | 'type1' | 'type2' | 'prediabetic' | 'gestational'
+  cholesterol: string;     // '' | 'high' | 'low' | 'medication'
+  otherConditions: string;
 }
 
 const defaultBodyData: BodyData = {
   weight: '', weightUnit: 'kg', height: '', heightUnit: 'cm',
   dob: '', gender: '', activityLevel: '', goal: '',
+  bloodPressure: '', thyroid: '', diabetes: '', cholesterol: '', otherConditions: '',
 };
 
 function loadBodyData(): BodyData {
@@ -62,6 +69,19 @@ function getNotifyPref(id: number) {
   try { const v = localStorage.getItem(`meal_notify_${id}`); return v === null ? true : v === 'true'; } catch { return true; }
 }
 function setNotifyPref(id: number, v: boolean) { try { localStorage.setItem(`meal_notify_${id}`, String(v)); } catch {} }
+
+const ALL_MEAL_TYPES: { id: string; label: string; icon: string }[] = [
+  { id: 'early_morning', label: 'Early Morning Drink', icon: '🌄' },
+  { id: 'breakfast',     label: 'Breakfast',           icon: '🍳' },
+  { id: 'mid_breakfast', label: 'Mid-Breakfast Snack', icon: '🍎' },
+  { id: 'lunch',         label: 'Lunch',               icon: '🍱' },
+  { id: 'evening_snack', label: 'Evening Snack',       icon: '☕' },
+  { id: 'dinner',        label: 'Dinner',              icon: '🍽️' },
+  { id: 'bedtime',       label: 'Bedtime Snack/Drink', icon: '🌙' },
+  { id: 'pre_workout',   label: 'Pre-Workout Snack',   icon: '💪' },
+  { id: 'post_workout',  label: 'Post-Workout Snack',  icon: '🥤' },
+];
+const DEFAULT_MEAL_TYPES = ['breakfast', 'lunch', 'dinner'];
 
 function buildPrefsChip(form: GenerateForm): string {
   const parts: string[] = [];
@@ -94,52 +114,110 @@ function NotifyToggle({ planId }: { planId: number }) {
 // ---------------------------------------------------------------------------
 // Plan card
 // ---------------------------------------------------------------------------
-function PlanCard({ plan, onView, onDelete, onToggleStatus }: { plan: Plan; onView: () => void; onDelete: (e: React.MouseEvent) => void; onToggleStatus: (e: React.MouseEvent) => void }) {
+function planDateStatus(weekStart?: string): 'past' | 'current' | 'future' | 'none' {
+  if (!weekStart) return 'none';
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const start = new Date(weekStart + 'T00:00:00');
+  const end = new Date(start); end.setDate(end.getDate() + 7);
+  if (end <= today) return 'past';
+  if (start <= today) return 'current';
+  return 'future';
+}
+
+function PlanCard({ plan, onView, onSetDate }: { plan: Plan; onView: () => void; onSetDate: (date: string) => void }) {
   const dietary = plan.preferences_json?.dietary ?? [];
   const cuisine = plan.preferences_json?.cuisine;
-  const isArchived = plan.status === 'archived';
+  const ds = planDateStatus(plan.week_start_date);
+  const [showDateEdit, setShowDateEdit] = useState(false);
+  const [editDate, setEditDate] = useState(plan.week_start_date ?? '');
+
+  // Border & opacity by date status
+  const borderColor = ds === 'current' ? 'rgba(74,222,128,0.4)'
+    : ds === 'future'  ? 'rgba(96,165,250,0.3)'
+    : ds === 'past'    ? 'rgba(255,255,255,0.05)'
+    : 'rgba(255,255,255,0.08)';
+  const cardOpacity = ds === 'past' ? 0.5 : 1;
+
+  // Date chip display
+  const dateLabel = plan.week_start_date
+    ? (ds === 'current' ? `This week · ${fmtWeekStart(plan.week_start_date)}`
+      : ds === 'future'  ? `Starts ${fmtWeekStart(plan.week_start_date)}`
+      : `Past · ${fmtWeekStart(plan.week_start_date)}`)
+    : 'Set start date';
+  const dateColor = ds === 'current' ? '#4ade80' : ds === 'future' ? '#60a5fa' : ds === 'past' ? 'var(--text-tertiary)' : 'var(--claude-orange)';
+
   return (
     <div
       onClick={onView}
-      style={{ background: 'var(--bg-surface)', border: `1px solid ${isArchived ? 'rgba(255,255,255,0.04)' : 'var(--border, rgba(255,255,255,0.08))'}`, borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'border-color 0.2s', opacity: isArchived ? 0.65 : 1 }}
-      onMouseEnter={e => { if (!isArchived) (e.currentTarget as HTMLElement).style.borderColor = 'rgba(218,119,86,0.4)'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = isArchived ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.08)'; }}
+      style={{ background: 'var(--bg-surface)', border: `1px solid ${borderColor}`, borderRadius: 14, overflow: 'hidden', display: 'flex', flexDirection: 'column', cursor: 'pointer', transition: 'border-color 0.2s', opacity: cardOpacity, position: 'relative' }}
+      onMouseEnter={e => { if (ds !== 'past') (e.currentTarget as HTMLElement).style.borderColor = 'rgba(218,119,86,0.45)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = borderColor; }}
     >
-      <div style={{ padding: '16px 16px 12px', flex: 1 }}>
+      {/* Current-week indicator stripe */}
+      {ds === 'current' && <div style={{ height: 3, background: 'linear-gradient(90deg,#4ade80,#22d3ee)', borderRadius: '14px 14px 0 0' }} />}
+      {ds === 'future'  && <div style={{ height: 3, background: 'linear-gradient(90deg,#60a5fa,#818cf8)', borderRadius: '14px 14px 0 0' }} />}
+
+      <div style={{ padding: '14px 16px 14px', flex: 1 }}>
+        {/* Row 1: name + bell */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
           <h3 style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)', margin: 0, lineHeight: 1.3 }}>{plan.name}</h3>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-            {isArchived && <span style={{ fontSize: 9, background: 'rgba(255,255,255,0.08)', color: 'var(--text-tertiary)', borderRadius: 4, padding: '2px 6px', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Archived</span>}
-            <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>{fmtDate(plan.created_at)}</span>
+          <div onClick={e => e.stopPropagation()} style={{ flexShrink: 0 }}>
+            <NotifyToggle planId={plan.id} />
           </div>
         </div>
+
+        {/* Row 2: Date chip (clickable) + meal count + servings */}
+        <div style={{ display: 'flex', gap: 10, fontSize: 12, marginBottom: dietary.length > 0 || cuisine ? 10 : 0, flexWrap: 'wrap', alignItems: 'center' }}>
+
+          {/* Date chip — click to set/change date */}
+          <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
+            <button
+              onClick={() => { setEditDate(plan.week_start_date ?? ''); setShowDateEdit(v => !v); }}
+              style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'none', border: 'none', cursor: 'pointer', color: dateColor, fontSize: 12, fontWeight: plan.week_start_date ? 600 : 400, padding: 0, fontFamily: 'inherit' }}
+              title="Click to set or change start date"
+            >
+              <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              {dateLabel}
+              <svg width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24" style={{ opacity: 0.5 }}><path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a2 2 0 01-1.414.586H9v-2a2 2 0 01.586-1.414z"/></svg>
+            </button>
+
+            {showDateEdit && (
+              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.15))', borderRadius: 10, padding: 10, zIndex: 300, boxShadow: '0 8px 28px rgba(0,0,0,0.45)', minWidth: 230 }}>
+                <div style={{ fontSize: 10, color: 'var(--text-tertiary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Set week start date</div>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={e => setEditDate(e.target.value)}
+                  style={{ width: '100%', padding: '7px 10px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 7, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit', marginBottom: 8 }}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setShowDateEdit(false)} style={{ flex: 1, background: 'transparent', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 6, padding: '6px 0', fontSize: 12, color: 'var(--text-secondary)', cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                  <button
+                    onClick={() => { if (editDate) { onSetDate(editDate); setShowDateEdit(false); } }}
+                    disabled={!editDate}
+                    style={{ flex: 2, background: editDate ? 'var(--claude-orange)' : 'rgba(218,119,86,0.3)', border: 'none', borderRadius: 6, padding: '6px 0', fontSize: 12, fontWeight: 600, color: '#fff', cursor: editDate ? 'pointer' : 'not-allowed', fontFamily: 'inherit' }}>Apply</button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-secondary)' }}>
+            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" d="M3 6h18M3 12h18M3 18h12"/></svg>
+            {plan.slot_count} meals
+          </span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'var(--text-secondary)' }}>
+            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path strokeLinecap="round" d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+            {plan.servings}
+          </span>
+        </div>
+
+        {/* Row 3: dietary / cuisine tags */}
         {(dietary.length > 0 || cuisine) && (
-          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 8 }}>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
             {dietary.slice(0, 2).map(d => <span key={d} style={{ fontSize: 10, background: 'rgba(74,222,128,0.12)', color: '#4ade80', borderRadius: 5, padding: '2px 7px' }}>{d}</span>)}
             {cuisine && <span style={{ fontSize: 10, background: 'rgba(96,165,250,0.12)', color: '#60a5fa', borderRadius: 5, padding: '2px 7px' }}>{cuisine}</span>}
           </div>
         )}
-        <div style={{ display: 'flex', gap: 12, fontSize: 11, color: 'var(--text-secondary)' }}>
-          <span>🍽️ {plan.slot_count} meals</span>
-          <span>👤 {plan.servings} serving{plan.servings !== 1 ? 's' : ''}</span>
-          {plan.week_start_date && <span>📅 {fmtWeekStart(plan.week_start_date)}</span>}
-        </div>
-      </div>
-      <div style={{ height: 1, background: 'var(--border, rgba(255,255,255,0.07))' }} />
-      <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 6 }} onClick={e => e.stopPropagation()}>
-        <NotifyToggle planId={plan.id} />
-        {/* Active/Archived toggle */}
-        <button onClick={onToggleStatus} title={isArchived ? 'Restore to active' : 'Archive plan'}
-          style={{ background: 'none', border: 'none', cursor: 'pointer', color: isArchived ? '#4ade80' : 'var(--text-tertiary)', padding: '4px 6px', borderRadius: 6, fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
-          {isArchived ? (
-            <><svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Restore</>
-          ) : (
-            <><svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg> Archive</>
-          )}
-        </button>
-        <div style={{ flex: 1 }} />
-        <button onClick={e => { e.stopPropagation(); onView(); }} style={{ background: 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 7, padding: '6px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>View</button>
-        <button onClick={onDelete} title="Delete" style={{ background: 'rgba(224,107,107,0.1)', color: '#E06B6B', border: '1px solid rgba(224,107,107,0.25)', borderRadius: 7, padding: '6px 9px', fontSize: 12, cursor: 'pointer' }}>🗑</button>
       </div>
     </div>
   );
@@ -238,6 +316,71 @@ function BodyModal({ data, onSave, onClose }: { data: BodyData; onSave: (d: Body
               <option value="Manage Condition">Manage a Health Condition</option>
             </select>
           </div>
+
+          {/* ─── Health Conditions divider ─── */}
+          <div style={{ borderTop: '1px solid var(--border, rgba(255,255,255,0.08))', paddingTop: 14, marginTop: 2 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-secondary)', marginBottom: 12, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              🩺 Health Conditions <span style={{ fontWeight: 400, fontSize: 10, color: 'var(--text-tertiary)', textTransform: 'none', letterSpacing: 0 }}>(optional — helps AI plan meals accordingly)</span>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* BP + Thyroid row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={labelStyle}>Blood Pressure</label>
+                  <select value={form.bloodPressure} onChange={e => set('bloodPressure', e.target.value)} style={inputStyle}>
+                    <option value="">None / Normal</option>
+                    <option value="high">High BP (Hypertension)</option>
+                    <option value="low">Low BP (Hypotension)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Thyroid</label>
+                  <select value={form.thyroid} onChange={e => set('thyroid', e.target.value)} style={inputStyle}>
+                    <option value="">None</option>
+                    <option value="hypothyroid">Hypothyroid (Under-active)</option>
+                    <option value="hyperthyroid">Hyperthyroid (Over-active)</option>
+                    <option value="medication">Thyroid — On Medication</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Diabetes + Cholesterol row */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                  <label style={labelStyle}>Diabetes</label>
+                  <select value={form.diabetes} onChange={e => set('diabetes', e.target.value)} style={inputStyle}>
+                    <option value="">None</option>
+                    <option value="type1">Type 1 Diabetes</option>
+                    <option value="type2">Type 2 Diabetes</option>
+                    <option value="prediabetic">Pre-diabetic</option>
+                    <option value="gestational">Gestational Diabetes</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={labelStyle}>Cholesterol</label>
+                  <select value={form.cholesterol} onChange={e => set('cholesterol', e.target.value)} style={inputStyle}>
+                    <option value="">None / Normal</option>
+                    <option value="high">High Cholesterol</option>
+                    <option value="low">Low Cholesterol</option>
+                    <option value="medication">Cholesterol — On Medication</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Other conditions */}
+              <div>
+                <label style={labelStyle}>Other Conditions <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>(PCOD, kidney, liver, heart, etc.)</span></label>
+                <input
+                  type="text"
+                  value={form.otherConditions}
+                  onChange={e => set('otherConditions', e.target.value)}
+                  placeholder="e.g. PCOD, kidney stones, IBS…"
+                  style={inputStyle}
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
@@ -270,13 +413,17 @@ export default function MealPlansPage() {
   // pendingForm: preferences set via modal, ready to be included in next generate
   const [pendingForm, setPendingForm] = useState<GenerateForm | null>(null);
   const [multiWeekNotice, setMultiWeekNotice] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef    = useRef<HTMLTextAreaElement>(null);
+  const mealTypeBtnRef = useRef<HTMLDivElement>(null);
+
+  // Inline search-bar selections
+  const [selectedMealTypes, setSelectedMealTypes] = useState<string[]>(DEFAULT_MEAL_TYPES);
+  const [showMealTypeMenu, setShowMealTypeMenu]   = useState(false);
 
   // LLM provider selection for meal planning
   const [llmProviders, setLlmProviders]           = useState<{ id: string; label: string }[]>([]);
   const [selectedLlmProvider, setSelectedLlmProvider] = useState<string | null>(null);
 
-  const [statusTab, setStatusTab] = useState<'active' | 'archived'>('active');
   const [form, setForm] = useState<GenerateForm>({
     name: '', dietary_preferences: [], allergies: [], servings: 2, cuisine_preference: '', week_start_date: '',
   });
@@ -293,13 +440,18 @@ export default function MealPlansPage() {
     try { const r = await fetch(`${API}/meal-plans/usage`, { headers: { Authorization: `Bearer ${token}` } }); if (r.ok) setUsage(await r.json()); } catch {}
   };
 
-  const fetchPlans = async (status = 'active') => {
+  const fetchPlans = async () => {
     const token = tok(); if (!token) { router.push('/'); return; }
     setLoading(true);
     try {
-      const r = await fetch(`${API}/meal-plans?status=${status}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (r.status === 401) { router.push('/'); return; }
-      setPlans((await r.json()).plans ?? []);
+      const [rActive, rArchived] = await Promise.all([
+        fetch(`${API}/meal-plans?status=active`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API}/meal-plans?status=archived`, { headers: { Authorization: `Bearer ${token}` } }),
+      ]);
+      if (rActive.status === 401) { router.push('/'); return; }
+      const active: Plan[] = rActive.ok ? ((await rActive.json()).plans ?? []) : [];
+      const archived: Plan[] = rArchived.ok ? ((await rArchived.json()).plans ?? []) : [];
+      setPlans([...active, ...archived]);
     } catch { setError('Failed to load meal plans'); }
     finally { setLoading(false); }
   };
@@ -312,10 +464,19 @@ export default function MealPlansPage() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok()}` },
       body: JSON.stringify({ status: newStatus }),
     });
-    await fetchPlans(statusTab);
+    await fetchPlans();
   };
 
-  useEffect(() => { fetchPlans(statusTab); fetchUsage(); }, [statusTab]);
+  useEffect(() => { fetchPlans(); fetchUsage(); }, []);
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (mealTypeBtnRef.current && !mealTypeBtnRef.current.contains(e.target as Node)) setShowMealTypeMenu(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
 
   // Fetch LLM providers enabled for meal_plan feature
   useEffect(() => {
@@ -361,6 +522,15 @@ export default function MealPlansPage() {
     }
   };
 
+  const handleSetDate = async (planId: number, date: string) => {
+    await fetch(`${API}/meal-plans/${planId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tok()}` },
+      body: JSON.stringify({ week_start_date: date }),
+    });
+    fetchPlans();
+  };
+
   const handleDelete = async (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
     if (!confirm('Delete this meal plan?')) return;
@@ -385,6 +555,7 @@ export default function MealPlansPage() {
           allergies: genForm.allergies,
           servings: genForm.servings,
           cuisine_preference: genForm.cuisine_preference || undefined,
+          meal_types: selectedMealTypes.length ? selectedMealTypes : DEFAULT_MEAL_TYPES,
           week_start_date: genForm.week_start_date || undefined,
           extra_context: searchText.trim() || undefined,
           body_lifestyle: (bodyData.weight || bodyData.goal || bodyData.activityLevel) ? bodyData : undefined,
@@ -430,7 +601,7 @@ export default function MealPlansPage() {
     return true;
   });
 
-  const hasBodyProfile = !!(bodyData.weight || bodyData.goal || bodyData.activityLevel);
+  const hasBodyProfile = !!(bodyData.weight || bodyData.goal || bodyData.activityLevel || bodyData.bloodPressure || bodyData.thyroid || bodyData.diabetes || bodyData.cholesterol || bodyData.otherConditions);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg)' }}>
@@ -443,16 +614,6 @@ export default function MealPlansPage() {
           <div style={{ marginBottom: 16 }}>
             <h1 style={{ fontSize: 24, fontWeight: 800, color: 'var(--text-primary)', margin: '0 0 4px', letterSpacing: '-0.02em' }}>Your Meal Plans</h1>
             <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: 0 }}>AI-generated 7-day personalised meal plans</p>
-          </div>
-
-          {/* Active / Archived tabs */}
-          <div style={{ display: 'flex', gap: 4, marginBottom: 20, background: 'var(--bg-surface)', borderRadius: 10, padding: 4, width: 'fit-content', border: '1px solid var(--border, rgba(255,255,255,0.08))' }}>
-            {(['active', 'archived'] as const).map(tab => (
-              <button key={tab} onClick={() => setStatusTab(tab)}
-                style={{ padding: '6px 16px', fontSize: 12, fontWeight: statusTab === tab ? 700 : 400, borderRadius: 7, border: 'none', cursor: 'pointer', background: statusTab === tab ? 'var(--claude-orange)' : 'transparent', color: statusTab === tab ? '#fff' : 'var(--text-secondary)', transition: 'background 0.15s,color 0.15s', textTransform: 'capitalize' }}>
-                {tab}
-              </button>
-            ))}
           </div>
 
           {/* Upgrade banner */}
@@ -516,8 +677,7 @@ export default function MealPlansPage() {
               {filteredPlans.map(plan => (
                 <PlanCard key={plan.id} plan={plan}
                   onView={() => router.push(`/meal-plans/${encodePlanId(plan.id)}`)}
-                  onDelete={e => handleDelete(plan.id, e)}
-                  onToggleStatus={e => handleToggleStatus(plan, e)} />
+                  onSetDate={date => handleSetDate(plan.id, date)} />
               ))}
             </div>
           )}
@@ -525,7 +685,7 @@ export default function MealPlansPage() {
       </div>
 
       {/* ── Bottom search bar ── */}
-      <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg-elevated)', padding: '12px 16px 16px' }}>
+      <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', background: 'var(--bg)', padding: '12px 16px 16px' }}>
         <div style={{ maxWidth: 680, margin: '0 auto' }}>
           {/* Usage bar */}
           {usage && (usage.daily_limit !== null || usage.monthly_limit !== null) && (
@@ -554,50 +714,114 @@ export default function MealPlansPage() {
             </div>
           )}
 
-          {/* Input box */}
-          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 14, padding: '10px 10px 10px 16px' }}>
+          {/* Input box — LLM-style with icon toolbar at bottom */}
+          <div style={{ background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 16, padding: '12px 14px 10px' }}>
             <textarea
               ref={textareaRef}
               value={searchText}
               onChange={e => setSearchText(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handlePlanMeal(); } }}
-              placeholder={pendingForm ? 'Add more details… then click Plan Meal to generate' : 'Describe your ideal week… e.g. high-protein vegetarian plan'}
-              rows={1}
-              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 14, lineHeight: 1.5, resize: 'none', fontFamily: 'inherit', maxHeight: 80, overflowY: 'auto' }}
+              placeholder={pendingForm ? 'Add more details… then click Generate' : 'Describe your ideal week… e.g. high-protein vegetarian plan for thyroid'}
+              rows={2}
+              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: 14, lineHeight: 1.6, resize: 'none', fontFamily: 'inherit', maxHeight: 100, overflowY: 'auto', boxSizing: 'border-box' }}
             />
 
-            {/* Body & Lifestyle icon button */}
-            <button
-              onClick={() => setShowBodyModal(true)}
-              title="Body & Lifestyle profile"
-              style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', background: hasBodyProfile ? 'rgba(218,119,86,0.12)' : 'rgba(255,255,255,0.06)', border: `1px solid ${hasBodyProfile ? 'rgba(218,119,86,0.4)' : 'rgba(255,255,255,0.1)'}`, borderRadius: 10, color: hasBodyProfile ? 'var(--claude-orange)' : 'var(--text-tertiary)', cursor: 'pointer', flexShrink: 0, transition: 'background 0.15s,color 0.15s' }}
-            >
-              {/* Body/person silhouette icon */}
-              <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
-                <circle cx="12" cy="5" r="2.5"/>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 21v-6H6l2-6h8l2 6h-2v6"/>
-                <path strokeLinecap="round" d="M10 21v-3m4 3v-3"/>
-              </svg>
-            </button>
+            {/* ── Bottom toolbar ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6 }}>
 
-            {/* Plan Meal button */}
-            <button
-              onClick={handlePlanMeal}
-              disabled={generating}
-              style={{ background: generating ? 'rgba(218,119,86,0.5)' : 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 10, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: generating ? 'not-allowed' : 'pointer', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap' }}
-            >
-              {generating
-                ? <><span style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} /> Generating…</>
-                : pendingForm
-                  ? <><svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 12l5 5L19 7"/></svg> Generate</>
-                  : <><svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg> Plan Meal</>
-              }
-            </button>
+              {/* 1 · Meal Types pill */}
+              <div style={{ position: 'relative' }} ref={mealTypeBtnRef}>
+                <button
+                  onClick={() => { setShowMealTypeMenu(v => !v); }}
+                  title="Select meal types"
+                  style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 20, border: `1px solid ${showMealTypeMenu ? 'rgba(218,119,86,0.5)' : 'rgba(255,255,255,0.1)'}`, background: showMealTypeMenu ? 'rgba(218,119,86,0.1)' : 'rgba(255,255,255,0.05)', color: selectedMealTypes.length !== DEFAULT_MEAL_TYPES.length ? 'var(--claude-orange)' : 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}
+                >
+                  {/* Utensils icon */}
+                  <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 002-2V2"/>
+                    <path strokeLinecap="round" d="M7 2v20M21 15V2a5 5 0 00-5 5v6h3.5"/>
+                    <path strokeLinecap="round" d="M19.5 13v9"/>
+                  </svg>
+                  <span>Meals</span>
+                  {selectedMealTypes.length !== DEFAULT_MEAL_TYPES.length && (
+                    <span style={{ background: 'var(--claude-orange)', color: '#fff', borderRadius: '50%', width: 16, height: 16, fontSize: 9, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{selectedMealTypes.length}</span>
+                  )}
+                  <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ opacity: 0.5 }}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+
+                {/* Meal types dropdown */}
+                {showMealTypeMenu && (
+                  <div style={{ position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, background: 'var(--bg-surface)', border: '1px solid var(--border, rgba(255,255,255,0.12))', borderRadius: 12, padding: '8px 4px', minWidth: 210, boxShadow: '0 8px 32px rgba(0,0,0,0.4)', zIndex: 200 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.08em', padding: '2px 12px 6px' }}>Select Meal Types</div>
+                    {ALL_MEAL_TYPES.map(mt => {
+                      const checked = selectedMealTypes.includes(mt.id);
+                      return (
+                        <label key={mt.id}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px', cursor: 'pointer', borderRadius: 8, background: checked ? 'rgba(218,119,86,0.08)' : 'transparent', transition: 'background 0.1s' }}
+                          onMouseEnter={e => { if (!checked) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)'; }}
+                          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = checked ? 'rgba(218,119,86,0.08)' : 'transparent'; }}
+                        >
+                          <input type="checkbox" checked={checked}
+                            onChange={() => setSelectedMealTypes(prev => toggle(prev, mt.id))}
+                            style={{ accentColor: 'var(--claude-orange)', width: 14, height: 14, cursor: 'pointer', flexShrink: 0 }} />
+                          <span style={{ fontSize: 13 }}>{mt.icon}</span>
+                          <span style={{ fontSize: 12, color: checked ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: checked ? 600 : 400 }}>{mt.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* 2 · Set Plan Preferences pill */}
+              <button
+                onClick={() => { setShowMealTypeMenu(false); openPrefsModal(); }}
+                title="Set plan preferences (dietary, cuisine, servings…)"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 20, border: `1px solid ${pendingForm ? 'rgba(218,119,86,0.5)' : 'rgba(255,255,255,0.1)'}`, background: pendingForm ? 'rgba(218,119,86,0.08)' : 'rgba(255,255,255,0.05)', color: pendingForm ? 'var(--claude-orange)' : 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}
+              >
+                {/* Sliders / preferences icon */}
+                <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+                  <line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/>
+                  <circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="10" cy="18" r="2" fill="currentColor" stroke="none"/>
+                </svg>
+                <span>{pendingForm ? 'Preferences ✓' : 'Preferences'}</span>
+              </button>
+
+              {/* 3 · Body & Lifestyle pill */}
+              <button
+                onClick={() => setShowBodyModal(true)}
+                title="Body & Lifestyle profile"
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 20, border: `1px solid ${hasBodyProfile ? 'rgba(218,119,86,0.4)' : 'rgba(255,255,255,0.1)'}`, background: hasBodyProfile ? 'rgba(218,119,86,0.1)' : 'rgba(255,255,255,0.05)', color: hasBodyProfile ? 'var(--claude-orange)' : 'var(--text-secondary)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', transition: 'all 0.15s' }}
+              >
+                <svg width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24">
+                  <circle cx="12" cy="5" r="2.5"/>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 21v-6H6l2-6h8l2 6h-2v6"/>
+                  <path strokeLinecap="round" d="M10 21v-3m4 3v-3"/>
+                </svg>
+                <span>{hasBodyProfile ? 'Profile ✓' : 'Body'}</span>
+              </button>
+
+              <div style={{ flex: 1 }} />
+
+              {/* Generate button */}
+              <button
+                onClick={handlePlanMeal}
+                disabled={generating}
+                style={{ background: generating ? 'rgba(218,119,86,0.5)' : 'var(--claude-orange)', color: '#fff', border: 'none', borderRadius: 20, padding: '7px 18px', fontSize: 13, fontWeight: 700, cursor: generating ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 5, whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
+                {generating
+                  ? <><span style={{ width: 11, height: 11, border: '2px solid rgba(255,255,255,0.4)', borderTopColor: '#fff', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} /> Generating…</>
+                  : pendingForm
+                    ? <><svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 12l5 5L19 7"/></svg> Generate</>
+                    : <><svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M13 6l6 6-6 6"/></svg> Plan Meal</>
+                }
+              </button>
+            </div>
           </div>
 
           {!pendingForm && (
             <p style={{ fontSize: 11, color: 'var(--text-tertiary)', margin: '6px 0 0', textAlign: 'center' }}>
-              Press <kbd style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Enter</kbd> or click <strong>Plan Meal</strong> to set preferences
+              Press <kbd style={{ background: 'rgba(255,255,255,0.08)', borderRadius: 3, padding: '1px 5px', fontSize: 10 }}>Enter</kbd> or click <strong>Plan Meal</strong> to set preferences &amp; generate
             </p>
           )}
         </div>
@@ -647,20 +871,14 @@ export default function MealPlansPage() {
 
               {options.cuisine.length > 0 && (
                 <div>
-                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>🌍 Cuisine</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 8 }}>🌍 Cuisine
+                    {form.cuisine_preference && <span style={{ marginLeft: 8, fontSize: 11, color: '#60a5fa' }}>{form.cuisine_preference}</span>}
+                  </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                     {options.cuisine.map(opt => { const s = form.cuisine_preference === opt; return <button key={opt} type="button" onClick={() => setForm(f => ({ ...f, cuisine_preference: s ? '' : opt }))} style={{ padding: '5px 12px', fontSize: 12, borderRadius: 20, cursor: 'pointer', fontWeight: s ? 600 : 400, background: s ? 'rgba(96,165,250,0.2)' : 'rgba(255,255,255,0.06)', color: s ? '#60a5fa' : 'var(--text-secondary)', border: `1px solid ${s ? 'rgba(96,165,250,0.5)' : 'rgba(255,255,255,0.1)'}` }}>{opt}</button>; })}
                   </div>
                 </div>
               )}
-
-              {/* Start date */}
-              <label style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-                Plan start date <span style={{ fontSize: 11, color: 'var(--text-tertiary)' }}>(any day — your plan runs 7 days from here)</span>
-                <input type="date" value={form.week_start_date}
-                  onChange={e => setForm(f => ({ ...f, week_start_date: e.target.value }))}
-                  style={{ display: 'block', width: '100%', marginTop: 4, padding: '9px 12px', background: 'var(--bg)', border: '1px solid var(--border, rgba(255,255,255,0.1))', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit' }} />
-              </label>
 
               <label style={{ fontSize: 13, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span>Servings per meal</span>
