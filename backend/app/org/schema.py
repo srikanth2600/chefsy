@@ -29,9 +29,11 @@ class OrgProfileUpdate(BaseModel):
     phone: Optional[str] = None
     website_url: Optional[str] = None
     address_line1: Optional[str] = None
+    address_line2: Optional[str] = None
     city: Optional[str] = None
     state: Optional[str] = None
-    pincode: Optional[str] = None
+    postcode: Optional[str] = None
+    country: Optional[str] = None
     accent_color: Optional[str] = None
     org_rules_json: Optional[dict] = None
     active_modules: Optional[List[str]] = None

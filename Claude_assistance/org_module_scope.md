@@ -51,6 +51,7 @@ All three plans arrive under Ravi's account. He has **one login** and sees all h
 | Member Management | ✅ | ✅ | ✅ | — | ✅ |
 | Group / Cohort Mgmt | ✅ | ✅ | ✅ | — | ✅ |
 | AI Meal Planning (bulk) | ✅ | ✅ | ✅ | — | ✅ |
+| **Manual Meal Planner (templates)** | Optional | ✅ | ✅ | — | Optional |
 | Reels / Video Content | ❌ | ✅ | ✅ | ✅ | Optional |
 | Compliance / Check-ins | ✅ | ✅ | ✅ | — | Optional |
 | Challenges / Gamification | ✅ | ✅ | ✅ | — | Optional |
@@ -1057,6 +1058,48 @@ ORG_PLAN_LIMITS = {
 | `frontend/src/app/org-dashboard/` | Create: all pages |
 | `frontend/src/app/my-orgs/` | Create: multi-org switcher |
 | `frontend/src/app/org-register/` | Create: onboarding wizard |
+
+---
+
+---
+
+## Phase 8 — Custom Manual Meal Planner (COMPLETE — 2026-03-30)
+
+### New DB Tables (added to `run_startup_migrations()`)
+
+| Table | Purpose |
+|---|---|
+| `org_template_meal_plan` | Template plans created by org admin/staff. Status: `draft → published → archived` |
+| `org_template_meal_plan_slot` | 7-day grid slots (identical structure to `meal_plan_slot`) |
+| `org_template_plan_invite` | Tracks per-member invites: `pending → adopted | declined`. Stores `adopted_plan_id` FK to personal `meal_plan` |
+
+Also seeded: `platform_module` row for `org_custom_meal_planner`.
+
+### Module Toggle
+- Global: `platform_module.is_active` for `org_custom_meal_planner` (super admin controlled)
+- Per-org: `org_profile.active_modules` JSONB includes `"org_custom_meal_planner"` (set by admin via `PATCH /admin/orgs/{id}/modules`)
+- Guard: `require_org_module_active(org, 'org_custom_meal_planner')` (new function in `org/modules/__init__.py`)
+
+### New Backend Files
+- `backend/app/org/modules/custom_meal_planner.py` — 11 endpoints at `/org/me/custom-meal-planner`
+- 3 new routes added to `backend/app/org/member_router.py` (`/my-orgs/{id}/invited-plans`, `/adopt`, `/decline`)
+- 1 new endpoint in `backend/app/api/admin.py` (`PATCH /admin/orgs/{id}/modules`)
+
+### New Frontend Files
+- `frontend/src/app/adminpanel/orgs/page.tsx` — org list + per-org Custom Meal Planner toggle
+- `frontend/src/app/org-dashboard/layout.tsx` — org dashboard shell
+- `frontend/src/app/org-dashboard/meal-planner/page.tsx` — template plan list
+- `frontend/src/app/org-dashboard/meal-planner/[planId]/page.tsx` — 7-day grid editor + assign side-panel
+- `frontend/src/app/my-orgs/[orgId]/invited-plans/page.tsx` — member invite list + adopt/decline flow
+
+### Adoption Flow
+1. Org admin creates template plan (draft)
+2. Fills 7-day grid manually (type meals or pick from recipe_master)
+3. Publishes plan
+4. Assigns to members or groups (snapshot at time of assignment)
+5. Members see invites in `/my-orgs/{orgId}/invited-plans`
+6. Member adopts → `create_meal_plan()` + `bulk_insert_slots()` copies template into personal `meal_plan` table
+7. Adopted plan appears in member's `/meal-plans` list
 
 ---
 

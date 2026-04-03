@@ -14,6 +14,7 @@ from app.core.db import get_connection
 import psycopg
 from app.core.config import settings
 from app.core.security import create_access_token, decode_token
+from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 router = APIRouter(prefix="/auth")
@@ -604,14 +605,13 @@ class UpdateProfileRequest(BaseModel):
     address_line2: Optional[str] = None
     city: Optional[str] = None
     postcode: Optional[str] = None
-    latitude: Optional[float] = None
-    longitude: Optional[float] = None
+    country: Optional[str] = None
     body_info: Optional[dict] = None
 
 
 @router.put("/me")
-def update_me(req: UpdateProfileRequest, request: Request):
-    """Update authenticated user's profile fields."""
+async def update_me(req: UpdateProfileRequest, request: Request):
+    """Update authenticated user's profile fields. Auto-geocodes address to lat/lng."""
     from psycopg.types.json import Json as _Json
     user_id = _get_user_id_from_token(request)
     fields: dict = {}
@@ -622,6 +622,30 @@ def update_me(req: UpdateProfileRequest, request: Request):
             fields[k] = _Json(v)
         else:
             fields[k] = v
+
+    # Auto-geocode when any address field is provided
+    _ADDRESS_FIELDS = {"address_line1", "address_line2", "city", "postcode", "country"}
+    if _ADDRESS_FIELDS & fields.keys():
+        from app.utils.geocoding import geocode_address
+        # Fetch current stored values to fill gaps in partial updates
+        with get_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT address_line1, address_line2, city, postcode, country FROM users WHERE id = %s",
+                    (user_id,),
+                )
+                stored = cur.fetchone() or {}
+        merged = {
+            "address_line1": fields.get("address_line1") or stored.get("address_line1"),
+            "address_line2": fields.get("address_line2") or stored.get("address_line2"),
+            "city":          fields.get("city")          or stored.get("city"),
+            "postcode":      fields.get("postcode")      or stored.get("postcode"),
+            "country":       fields.get("country")       or stored.get("country"),
+        }
+        coords = await geocode_address(**merged)
+        if coords:
+            fields["latitude"], fields["longitude"] = coords
+
     if not fields:
         return {"status": "ok"}
     set_clause = ", ".join(f"{k} = %s" for k in fields)

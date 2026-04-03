@@ -117,9 +117,9 @@ export default function ProfilePage() {
   const [addrLine2, setAddrLine2] = useState('');
   const [city, setCity]           = useState('');
   const [postcode, setPostcode]   = useState('');
+  const [country, setCountry]     = useState('');
   const [lat, setLat]             = useState('');
   const [lng, setLng]             = useState('');
-  const [geocoding, setGeocoding] = useState(false);
 
   // Body & Lifestyle
   const [body, setBody] = useState<BodyInfo>({
@@ -155,6 +155,7 @@ export default function ProfilePage() {
         setAddrLine2(d.address_line2 || '');
         setCity(d.city || '');
         setPostcode(d.postcode || '');
+        setCountry(d.country || '');
         setLat(d.latitude != null ? String(d.latitude) : '');
         setLng(d.longitude != null ? String(d.longitude) : '');
         setAvatarUrl(d.profile_pic || null);
@@ -179,21 +180,6 @@ export default function ProfilePage() {
     }, 500);
     return () => clearTimeout(t);
   }, [slug]);
-
-  const geocodeAddress = async () => {
-    const q = [addrLine1, addrLine2, city, postcode].filter(Boolean).join(', ');
-    if (!q) return;
-    setGeocoding(true);
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`);
-      const data = await res.json();
-      if (data?.[0]) {
-        setLat(parseFloat(data[0].lat).toFixed(6));
-        setLng(parseFloat(data[0].lon).toFixed(6));
-      }
-    } catch {}
-    setGeocoding(false);
-  };
 
   const handleAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -233,13 +219,19 @@ export default function ProfilePage() {
           address_line2: addrLine2.trim() || null,
           city: city.trim() || null,
           postcode: postcode.trim() || null,
-          latitude: lat ? parseFloat(lat) : null,
-          longitude: lng ? parseFloat(lng) : null,
+          country: country.trim() || null,
           body_info,
         }),
       });
       if (r.ok) {
         setMsg('Saved!');
+        // Refresh to get auto-geocoded coordinates
+        const updated = await fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${tok()}` } });
+        if (updated.ok) {
+          const d = await updated.json();
+          setLat(d.latitude != null ? String(d.latitude) : '');
+          setLng(d.longitude != null ? String(d.longitude) : '');
+        }
       } else { setMsg('Failed to save.'); }
     } catch { setMsg('Network error.'); }
     setSaving(false);
@@ -370,23 +362,26 @@ export default function ProfilePage() {
             <label style={lbl}>Postcode</label>
             <input style={inp} value={postcode} onChange={e => setPostcode(e.target.value)} placeholder="Postcode / PIN" />
           </div>
-          <div>
-            <label style={lbl}>Latitude</label>
-            <input style={inp} value={lat} onChange={e => setLat(e.target.value)} placeholder="e.g. 51.5074" />
-          </div>
-          <div>
-            <label style={lbl}>Longitude</label>
-            <input style={inp} value={lng} onChange={e => setLng(e.target.value)} placeholder="e.g. -0.1278" />
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={lbl}>Country</label>
+            <input style={inp} value={country} onChange={e => setCountry(e.target.value)} placeholder="e.g. United Kingdom" />
           </div>
         </div>
-        <button
-          onClick={geocodeAddress}
-          disabled={geocoding}
-          style={{ ...btn, background: 'rgba(249,115,22,0.12)', color: '#F97316', border: '1px solid rgba(249,115,22,0.3)', padding: '7px 16px', fontWeight: 600 }}
-        >
-          {geocoding ? '⏳ Locating…' : '📍 Auto-detect coordinates from address'}
-        </button>
-        <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 6 }}>Uses address fields above to fill latitude &amp; longitude automatically.</p>
+        {(lat || lng) && (
+          <div style={{ display: 'flex', gap: 10 }}>
+            <div style={{ flex: 1 }}>
+              <label style={lbl}>Latitude</label>
+              <input style={inpDis} value={lat} disabled />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={lbl}>Longitude</label>
+              <input style={inpDis} value={lng} disabled />
+            </div>
+          </div>
+        )}
+        <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 8 }}>
+          Coordinates are auto-detected from your address when you save.
+        </p>
       </div>
 
       {/* ── Body & Lifestyle ── */}

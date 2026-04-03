@@ -17,6 +17,7 @@ from app.org.corporate import router as corporate_module
 from app.org.gym import router as gym_module
 from app.org.nutrition import router as nutrition_module
 from app.org.modules.meal_batch import router as meal_batch_module
+from app.org.modules.custom_meal_planner import router as custom_meal_planner_module
 from app.org.modules.compliance import router as compliance_module
 from app.org.modules.content import router as content_module
 from app.org.modules.challenges import router as challenges_module
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(nutrition_module.router, prefix="/org/me/nutrition")
     # org shared modules
     app.include_router(meal_batch_module, prefix="/org/me/meal-batches")
+    app.include_router(custom_meal_planner_module, prefix="/org/me/custom-meal-planner")
     app.include_router(compliance_module, prefix="/org/me/compliance")
     app.include_router(content_module, prefix="/org/me/content")
     app.include_router(challenges_module, prefix="/org/me/challenges")

@@ -1150,3 +1150,95 @@ def run_startup_migrations() -> None:
                 logger.info("Ensured nutrition-specific tables (clinical, protocol, plan_review, consultation)")
     except Exception:
         logger.exception("Failed to create nutrition-specific tables (continuing)")
+
+    # ── Org Custom Meal Planner module ──────────────────────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                # Seed platform_module entry for custom meal planner
+                cur.execute("""
+                    INSERT INTO platform_module (module_key, display_name, description)
+                    VALUES ('org_custom_meal_planner', 'Custom Meal Planner',
+                            'Allows org admins and staff to create manual template meal plans and assign them to members')
+                    ON CONFLICT (module_key) DO NOTHING
+                """)
+
+                # org_template_meal_plan — manually built template plans by org admin/staff
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_template_meal_plan (
+                      id               SERIAL PRIMARY KEY,
+                      org_id           INTEGER NOT NULL REFERENCES org_profile(id) ON DELETE CASCADE,
+                      created_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                      name             TEXT NOT NULL,
+                      description      TEXT,
+                      week_start_date  DATE,
+                      status           TEXT NOT NULL DEFAULT 'draft'
+                                         CHECK (status IN ('draft', 'published', 'archived')),
+                      meal_types       JSONB NOT NULL DEFAULT '["breakfast","lunch","dinner"]',
+                      target_prefs     JSONB NOT NULL DEFAULT '{}',
+                      published_at     TIMESTAMPTZ,
+                      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otmp_org    ON org_template_meal_plan(org_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otmp_status ON org_template_meal_plan(status)")
+
+                # org_template_meal_plan_slot — 7-day grid slots (mirrors meal_plan_slot)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_template_meal_plan_slot (
+                      id               SERIAL PRIMARY KEY,
+                      template_plan_id INTEGER NOT NULL REFERENCES org_template_meal_plan(id) ON DELETE CASCADE,
+                      day_index        SMALLINT NOT NULL CHECK (day_index BETWEEN 0 AND 6),
+                      meal_type        TEXT NOT NULL,
+                      recipe_id        INTEGER REFERENCES recipe_master(id) ON DELETE SET NULL,
+                      meal_name        TEXT,
+                      meal_json        JSONB,
+                      sort_order       SMALLINT NOT NULL DEFAULT 0,
+                      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      UNIQUE (template_plan_id, day_index, meal_type)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otmps_plan   ON org_template_meal_plan_slot(template_plan_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otmps_recipe ON org_template_meal_plan_slot(recipe_id)")
+
+                # org_template_plan_invite — assignment / invitation tracking
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS org_template_plan_invite (
+                      id               SERIAL PRIMARY KEY,
+                      template_plan_id INTEGER NOT NULL REFERENCES org_template_meal_plan(id) ON DELETE CASCADE,
+                      member_id        INTEGER NOT NULL REFERENCES org_member(id) ON DELETE CASCADE,
+                      group_id         INTEGER REFERENCES org_group(id) ON DELETE SET NULL,
+                      status           TEXT NOT NULL DEFAULT 'pending'
+                                         CHECK (status IN ('pending', 'adopted', 'declined')),
+                      adopted_plan_id  INTEGER REFERENCES meal_plan(id) ON DELETE SET NULL,
+                      invited_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                      responded_at     TIMESTAMPTZ,
+                      UNIQUE (template_plan_id, member_id)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otpi_template ON org_template_plan_invite(template_plan_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otpi_member   ON org_template_plan_invite(member_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_otpi_status   ON org_template_plan_invite(status)")
+
+                conn.commit()
+                logger.info("Ensured org_custom_meal_planner tables (template_plan, slots, invites)")
+    except Exception:
+        logger.exception("Failed to create org custom meal planner tables (continuing)")
+
+    # ── Address + geo columns for org_profile and users ─────────────────────
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                for col_sql in [
+                    "ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS address_line2 TEXT",
+                    "ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS postcode TEXT",
+                    "ALTER TABLE org_profile ADD COLUMN IF NOT EXISTS country TEXT",
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS country TEXT",
+                ]:
+                    cur.execute(col_sql)
+                conn.commit()
+                logger.info("Ensured address/geo columns on org_profile and users")
+    except Exception:
+        logger.exception("Failed to add address/geo columns (continuing)")

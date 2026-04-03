@@ -37,9 +37,9 @@ def get_my_org(request: Request):
 
 
 @router.patch("/me")
-def update_my_org(request: Request, body: OrgProfileUpdate):
+async def update_my_org(request: Request, body: OrgProfileUpdate):
     user_id = _require_user(request)
-    service.update_my_org(user_id, body.model_dump(exclude_none=True))
+    await service.update_my_org(user_id, body.model_dump(exclude_none=True))
     return {"status": "ok"}
 
 

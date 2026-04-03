@@ -43,6 +43,12 @@ const NAV = [
     ],
   },
   {
+    label: 'Organisations',
+    items: [
+      { id: 'orgs',     href: '/adminpanel/orgs',     icon: '🏛️',  label: 'Organisations' },
+    ],
+  },
+  {
     label: 'System',
     items: [
       { id: 'chats',      href: '/adminpanel/chats',      icon: '◻',  label: 'Chat Logs' },

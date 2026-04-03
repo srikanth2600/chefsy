@@ -57,10 +57,26 @@ def get_my_org(admin_user_id: int) -> dict:
     return org
 
 
-def update_my_org(admin_user_id: int, fields: dict) -> None:
+async def update_my_org(admin_user_id: int, fields: dict) -> None:
     org = repository.get_org_by_admin(admin_user_id)
     if not org:
         raise HTTPException(status_code=404, detail="Organisation not found.")
+
+    _ADDRESS_FIELDS = {"address_line1", "address_line2", "city", "postcode", "country"}
+    if _ADDRESS_FIELDS & fields.keys():
+        from app.utils.geocoding import geocode_address
+        # Merge incoming address with existing stored values so partial updates still geocode
+        merged = {
+            "address_line1": fields.get("address_line1") or org.get("address_line1"),
+            "address_line2": fields.get("address_line2") or org.get("address_line2"),
+            "city":          fields.get("city")          or org.get("city"),
+            "postcode":      fields.get("postcode")      or org.get("postcode"),
+            "country":       fields.get("country")       or org.get("country"),
+        }
+        coords = await geocode_address(**merged)
+        if coords:
+            fields["latitude"], fields["longitude"] = coords
+
     repository.update_org_profile(org["id"], fields)
 
 

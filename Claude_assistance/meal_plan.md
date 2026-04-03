@@ -130,6 +130,69 @@ Implemented as a pre-LLM intercept in `_chat_impl`:
 
 ---
 
+---
+
+## ✅ Phase 6 — Org Custom Meal Planner (COMPLETE)
+
+> Added: 2026-03-30
+
+### Feature Overview
+Organisations (Nutrition, Gym, etc.) can now **manually build** 7-day template meal plans and invite their members to adopt them. This is separate from the AI bulk-batch generation flow.
+
+### Database Tables (added to `run_startup_migrations()` in `backend/app/core/db.py`)
+- [x] `org_template_meal_plan` — template plans created manually by org admin/staff (draft/published/archived)
+- [x] `org_template_meal_plan_slot` — 7-day grid slots (mirrors `meal_plan_slot` structure exactly)
+- [x] `org_template_plan_invite` — assignment tracking (pending/adopted/declined), stores `adopted_plan_id` FK to personal `meal_plan`
+- [x] `platform_module` seeded with `org_custom_meal_planner` entry
+
+### Backend (`backend/app/org/modules/custom_meal_planner.py`)
+Registered at `/org/me/custom-meal-planner`:
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| POST | `/` | Create draft template plan |
+| GET | `/` | List templates by status |
+| GET | `/{plan_id}` | Detail + slots |
+| PATCH | `/{plan_id}` | Update metadata |
+| DELETE | `/{plan_id}` | Delete draft |
+| PUT | `/{plan_id}/slots` | Upsert slot (ON CONFLICT UPDATE) |
+| DELETE | `/{plan_id}/slots/{slot_id}` | Clear slot |
+| POST | `/{plan_id}/publish` | Publish (requires ≥1 slot) |
+| POST | `/{plan_id}/archive` | Archive |
+| POST | `/{plan_id}/assign/members` | Invite members |
+| POST | `/{plan_id}/assign/group` | Snapshot-invite group |
+| GET | `/{plan_id}/invites` | List invites + status |
+
+### Member Portal (`backend/app/org/member_router.py`)
+3 new routes added:
+- `GET /my-orgs/{org_id}/invited-plans` — list invites with plan metadata
+- `POST /my-orgs/{org_id}/invited-plans/{invite_id}/adopt` — copy template → personal `meal_plan` (reuses `create_meal_plan()` + `bulk_insert_slots()`)
+- `POST /my-orgs/{org_id}/invited-plans/{invite_id}/decline`
+
+### Admin Panel Backend (`backend/app/api/admin.py`)
+- `PATCH /admin/orgs/{org_id}/modules` — add/remove module keys from `org_profile.active_modules`
+
+### Guard Mechanism (`backend/app/org/modules/__init__.py`)
+- New `require_org_module_active(org, module_key)` — per-org check (complements existing `require_module_active()` global check)
+- Both guards called on every custom-planner endpoint
+
+### Frontend
+- **Admin Panel**: `frontend/src/app/adminpanel/orgs/page.tsx` — lists all orgs with Custom Meal Planner toggle (inline switch)
+- **Org Dashboard**: `frontend/src/app/org-dashboard/layout.tsx` + `meal-planner/page.tsx` + `meal-planner/[planId]/page.tsx`
+  - Grid editor: same 7-day layout as `/meal-plans/[id]`, editable cells, recipe search, slot save debounce
+  - Assign side-panel: members multi-select + group dropdown + invite list
+- **Member Portal**: `frontend/src/app/my-orgs/[orgId]/invited-plans/page.tsx`
+  - Lists pending/adopted/declined invites
+  - Per-invite: 7-day read-only grid preview + Adopt / Decline buttons
+  - Adopt → creates personal plan → links to `/meal-plans/{encodedId}`
+
+### Key Design Choices
+- Template plans use **separate tables** (not mixed into personal `meal_plan`) — no data leak risk
+- Group assignment = **snapshot** (invites current members at assignment time; re-assign for new members)
+- Adopt copies template slots → personal `meal_plan` row using existing repository functions unchanged
+
+---
+
 ## 🔴 Remaining / Pending Tasks
 
 ### P1 — High Priority

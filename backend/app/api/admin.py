@@ -1903,6 +1903,51 @@ def unblock_org(org_id: int, body: OrgUnblockRequest, request: Request):
     }
 
 
+class OrgModuleToggle(BaseModel):
+    module_key: str
+    enabled: bool
+
+
+@router.patch("/orgs/{org_id}/modules")
+def toggle_org_module(org_id: int, body: OrgModuleToggle, request: Request):
+    """
+    Enable or disable a feature module for a specific organisation.
+    Adds or removes the module_key from org_profile.active_modules.
+    Example: enable 'org_custom_meal_planner' for a Nutrition org.
+    """
+    uid = _get_user_id_from_request(request)
+    if not uid or not _ensure_admin(uid):
+        raise HTTPException(status_code=403, detail="Admin required")
+    from app.org import repository as org_repo
+    from app.core.db import get_connection
+    org = org_repo.get_org_by_id(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+
+    current_modules = list(org.get("active_modules") or [])
+    if body.enabled:
+        if body.module_key not in current_modules:
+            current_modules.append(body.module_key)
+    else:
+        current_modules = [m for m in current_modules if m != body.module_key]
+
+    from psycopg.types.json import Json
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE org_profile SET active_modules = %s, updated_at = NOW() WHERE id = %s",
+                (Json(current_modules), org_id),
+            )
+        conn.commit()
+
+    return {
+        "org_id": org_id,
+        "module_key": body.module_key,
+        "enabled": body.enabled,
+        "active_modules": current_modules,
+    }
+
+
 @router.get("/orgs/{org_id}/actions")
 def org_action_log(org_id: int, request: Request):
     """

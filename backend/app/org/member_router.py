@@ -298,6 +298,159 @@ def my_workout_plan(org_id: int, request: Request):
     return plan
 
 
+# ─── Custom Meal Planner — Invited Plans ─────────────────────────────────────
+
+@router.get("/my-orgs/{org_id}/invited-plans")
+def my_invited_plans(
+    org_id: int,
+    request: Request,
+    status: Optional[str] = Query(None),
+):
+    """Member views all template meal plan invites from this org."""
+    user_id = _require_user(request)
+    member = _get_member(user_id, org_id)
+    cond, params = "WHERE i.member_id = %s", [member["id"]]
+    if status:
+        cond += " AND i.status = %s"
+        params.append(status)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT i.id, i.status, i.invited_at, i.responded_at, i.adopted_plan_id,
+                       t.name AS plan_name, t.description, t.week_start_date,
+                       t.meal_types, t.target_prefs,
+                       g.name AS group_name
+                  FROM org_template_plan_invite i
+                  JOIN org_template_meal_plan t ON t.id = i.template_plan_id
+                  LEFT JOIN org_group g ON g.id = i.group_id
+                 {cond}
+                 ORDER BY i.invited_at DESC
+                """,
+                params,
+            )
+            return cur.fetchall()
+
+
+@router.post("/my-orgs/{org_id}/invited-plans/{invite_id}/adopt")
+def adopt_invited_plan(org_id: int, invite_id: int, request: Request):
+    """
+    Adopt a template plan: copies the template into the member's personal meal_plan.
+    The adopted plan appears in the member's /meal-plans list.
+    """
+    user_id = _require_user(request)
+    member = _get_member(user_id, org_id)
+
+    # Must have a linked user account to create a personal plan
+    if not member.get("user_id"):
+        raise HTTPException(
+            status_code=400,
+            detail="Please complete your account setup before adopting plans.",
+        )
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Fetch and validate the invite
+            cur.execute(
+                """
+                SELECT i.*, t.name AS plan_name, t.description, t.week_start_date,
+                       t.meal_types, t.target_prefs
+                  FROM org_template_plan_invite i
+                  JOIN org_template_meal_plan t ON t.id = i.template_plan_id
+                 WHERE i.id = %s AND i.member_id = %s
+                """,
+                (invite_id, member["id"]),
+            )
+            invite = cur.fetchone()
+
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found.")
+    if invite["status"] != "pending":
+        raise HTTPException(
+            status_code=422,
+            detail=f"This invite has already been '{invite['status']}'.",
+        )
+
+    # Fetch template slots
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT day_index, meal_type, recipe_id, meal_name, meal_json, sort_order
+                  FROM org_template_meal_plan_slot
+                 WHERE template_plan_id = %s
+                 ORDER BY day_index, sort_order, meal_type
+                """,
+                (invite["template_plan_id"],),
+            )
+            template_slots = cur.fetchall()
+
+    # Create personal meal_plan (reuses existing repository function)
+    from app.meal_plan import repository as mp_repo
+    plan_data = {
+        "name": invite["plan_name"],
+        "description": invite["description"],
+        "week_start_date": str(invite["week_start_date"]) if invite.get("week_start_date") else None,
+        "servings": 2,
+        "preferences_json": invite.get("target_prefs") or {},
+    }
+    personal_plan_id = mp_repo.create_meal_plan(member["user_id"], plan_data)
+
+    # Copy slots (reuses existing repository function)
+    mp_repo.bulk_insert_slots(personal_plan_id, [dict(s) for s in template_slots])
+
+    # Mark invite as adopted
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE org_template_plan_invite
+                   SET status = 'adopted', adopted_plan_id = %s, responded_at = NOW()
+                 WHERE id = %s
+                """,
+                (personal_plan_id, invite_id),
+            )
+        conn.commit()
+
+    return {
+        "status": "adopted",
+        "personal_plan_id": personal_plan_id,
+        "message": "Plan added to your Meal Plans.",
+    }
+
+
+@router.post("/my-orgs/{org_id}/invited-plans/{invite_id}/decline")
+def decline_invited_plan(org_id: int, invite_id: int, request: Request):
+    """Decline a template meal plan invite."""
+    user_id = _require_user(request)
+    member = _get_member(user_id, org_id)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, status FROM org_template_plan_invite WHERE id = %s AND member_id = %s",
+                (invite_id, member["id"]),
+            )
+            invite = cur.fetchone()
+
+    if not invite:
+        raise HTTPException(status_code=404, detail="Invite not found.")
+    if invite["status"] != "pending":
+        raise HTTPException(
+            status_code=422,
+            detail=f"This invite has already been '{invite['status']}'.",
+        )
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE org_template_plan_invite SET status = 'declined', responded_at = NOW() WHERE id = %s",
+                (invite_id,),
+            )
+        conn.commit()
+    return {"status": "declined"}
+
+
 # ─── Nutrition-Specific: My Clinical Summary (self-view) ─────────────────────
 
 @router.get("/my-orgs/{org_id}/clinical")
