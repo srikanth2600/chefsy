@@ -334,7 +334,24 @@ export default function Home() {
       if(j?.token){
         localStorage.setItem('gharka_token',j.token);
         localStorage.setItem('gharka_user_email',email);
-        try{const me=await fetch(`${apiBase}/auth/me`,{headers:{Authorization:`Bearer ${j.token}`}});if(me.ok){const mj=await me.json();if(mj?.full_name){localStorage.setItem('gharka_user_name',mj.full_name);setUserName(mj.full_name);}if(mj?.user_type){setUserType(mj.user_type);localStorage.setItem('gharka_user_type',mj.user_type);}}}catch{}
+        try{
+          const me=await fetch(`${apiBase}/auth/me`,{headers:{Authorization:`Bearer ${j.token}`}});
+          if(me.ok){
+            const mj=await me.json();
+            if(mj?.full_name){localStorage.setItem('gharka_user_name',mj.full_name);setUserName(mj.full_name);}
+            if(mj?.user_type){setUserType(mj.user_type);localStorage.setItem('gharka_user_type',mj.user_type);}
+            if(mj?.account_type){localStorage.setItem('gharka_account_type',mj.account_type);}
+            if(mj?.account_type==='organization'){
+              setUserEmailDisplay(email);setShowAuth(false);
+              try{
+                const orgR=await fetch(`${apiBase}/org/me`,{headers:{Authorization:`Bearer ${j.token}`}});
+                if(orgR.ok){localStorage.setItem('gharka_has_org','true');router.push('/org-dashboard');}
+                else{localStorage.removeItem('gharka_has_org');router.push('/org/register');}
+              }catch{router.push('/org/register');}
+              return;
+            }
+          }
+        }catch{}
         setUserEmailDisplay(email);setShowAuth(false);
         try{const id=await createChatSession();if(id)setChatId(id);setMessages([]);}catch{}
         fetchChats().catch(()=>{});
@@ -433,7 +450,7 @@ export default function Home() {
     }catch(err){alert('Reset failed: '+(err instanceof Error ? err.message : 'Please try again'));}
     finally{setAuthLoading(false);}
   };
-  const handleLogout=()=>{try{['gharka_token','gharka_user_email','gharka_user_name','gharka_user_type'].forEach(k=>localStorage.removeItem(k));}catch{}setUserName(null);setUserEmailDisplay(null);setUserType(null);setProfileMenuOpen(false);setChatId(null);setMessages([]);setStreamReady(false);seqMapRef.current={};};
+  const handleLogout=()=>{try{['gharka_token','gharka_user_email','gharka_user_name','gharka_user_type','gharka_account_type','gharka_has_org'].forEach(k=>localStorage.removeItem(k));}catch{}setUserName(null);setUserEmailDisplay(null);setUserType(null);setProfileMenuOpen(false);setChatId(null);setMessages([]);setStreamReady(false);seqMapRef.current={};};
 
   const showChefSlug = authUserType === 'Chef' || authUserType === 'Restaurant/Foodcourt'
     || (regAccountType === 'organization' && orgTypes.find(t => t.id === authOrgTypeId)?.name === 'Chef')

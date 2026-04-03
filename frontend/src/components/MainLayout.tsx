@@ -25,12 +25,24 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
   const [mobileSidebarOpen, setMobileSidebarOpen] = React.useState(false);
   const [drawerOpen, setDrawerOpen] = React.useState(true);
   const [isMobile, setIsMobile] = React.useState(false);
+  const [hasOrg, setHasOrg] = React.useState(false);
 
   React.useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768);
     check();
     window.addEventListener('resize', check);
     return () => window.removeEventListener('resize', check);
+  }, []);
+
+  // Detect org users — check localStorage flags set during login
+  React.useEffect(() => {
+    try {
+      const acct = localStorage.getItem('gharka_account_type');
+      const hasOrgFlag = localStorage.getItem('gharka_has_org');
+      if (acct === 'organization' || hasOrgFlag === 'true') {
+        setHasOrg(true);
+      }
+    } catch {}
   }, []);
 
   // Meal Plans sidebar data (only fetched on /meal-plans)
@@ -68,6 +80,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     pathname?.startsWith('/adminpanel') ||
     pathname?.startsWith('/chef') ||
     pathname?.startsWith('/chef-dashboard') ||
+    pathname?.startsWith('/org-dashboard') ||
     pathname?.startsWith('/find-chef') ||
     pathname?.startsWith('/upgrade') ||
     pathname?.startsWith('/recipes')
@@ -134,6 +147,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
           { href: '/find-chef', icon: '👨‍🍳', label: 'Find a Chef', active: pathname?.startsWith('/find-chef') },
           { href: '/meal-plans', icon: '🍽️', label: 'Meal Planner', active: pathname?.startsWith('/meal-plans') },
           { href: '/profile', icon: '👤', label: 'My Profile', active: pathname?.startsWith('/profile') },
+          ...(hasOrg ? [{ href: '/org-dashboard', icon: '🏢', label: 'Org Dashboard', active: pathname?.startsWith('/org-dashboard') }] : []),
         ].map(({ href, icon, label, active }) => (
           <a
             key={href + label}

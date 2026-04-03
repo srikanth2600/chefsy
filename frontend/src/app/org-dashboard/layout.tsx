@@ -1,24 +1,36 @@
 'use client';
 import React, { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import Link from 'next/link';
+import { ChefThemeProvider, useChefTheme } from '@/components/chef/ChefThemeContext';
+import { Avatar, ThemeToggle } from '@/components/chef/ui';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8005';
 
+const TYPE_ICON: Record<string, string> = {
+  gym: '🏋️', nutrition: '🥗', corporate: '🏢', others: '🏛️',
+};
+
 const NAV_ITEMS = [
-  { href: '/org-dashboard',                    icon: '▦',  label: 'Dashboard' },
-  { href: '/org-dashboard/meal-planner',        icon: '🥗', label: 'Meal Planner' },
-  { href: '/org-dashboard/members',             icon: '◎',  label: 'Members' },
-  { href: '/org-dashboard/groups',              icon: '👥', label: 'Groups' },
-  { href: '/org-dashboard/content',             icon: '🎬', label: 'Content' },
-  { href: '/org-dashboard/settings',            icon: '⚙',  label: 'Settings' },
+  { href: '/org-dashboard',              icon: '🏠', label: 'Dashboard' },
+  { href: '/org-dashboard/meal-planner', icon: '🥗', label: 'Meal Planner' },
+  { href: '/org-dashboard/members',      icon: '👥', label: 'Members' },
+  { href: '/org-dashboard/groups',       icon: '◎',  label: 'Groups' },
+  { href: '/org-dashboard/content',      icon: '🎬', label: 'Content' },
+  { href: '/org-dashboard/settings',     icon: '⚙',  label: 'Settings' },
 ];
 
-export default function OrgDashboardLayout({ children }: { children: React.ReactNode }) {
+function OrgShell({ children }: { children: React.ReactNode }) {
+  const { t } = useChefTheme();
   const router   = useRouter();
   const pathname = usePathname();
-  const [orgName, setOrgName] = useState('My Organisation');
-  const [orgType, setOrgType] = useState('');
+
+  const [org, setOrg] = useState({
+    org_name: 'My Organisation',
+    org_type: '',
+    slug: '',
+    logo_url: null as string | null,
+    is_public: false,
+  });
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -32,79 +44,150 @@ export default function OrgDashboardLayout({ children }: { children: React.React
         return r.json();
       })
       .then(d => {
-        if (d) {
-          setOrgName(d.org_name || 'My Organisation');
-          setOrgType(d.org_type || '');
-        }
+        if (d) setOrg({
+          org_name:   d.org_name   || 'My Organisation',
+          org_type:   d.org_type   || '',
+          slug:       d.slug       || '',
+          logo_url:   d.logo_url   || null,
+          is_public:  !!d.is_public,
+        });
       })
       .catch(() => router.replace('/auth/login'))
       .finally(() => setChecking(false));
   }, [router]);
 
+  const handleLogout = () => {
+    try {
+      localStorage.removeItem('gharka_token');
+      localStorage.removeItem('gharka_has_org');
+      localStorage.removeItem('gharka_account_type');
+    } catch {}
+    router.push('/');
+  };
+
   if (checking) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: '#64748b' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: t.bg, color: t.textSecondary, fontFamily: 'inherit' }}>
         Loading…
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#f8fafc', fontFamily: 'var(--font-sans, system-ui, sans-serif)' }}>
-      {/* Sidebar */}
-      <aside style={{
-        width: 220, flexShrink: 0, background: '#0f172a', color: '#e2e8f0',
-        display: 'flex', flexDirection: 'column',
-      }}>
+    <div style={{ display: 'flex', height: '100vh', background: t.bg, overflow: 'hidden', fontFamily: 'var(--font-sans, system-ui, sans-serif)' }}>
+
+      {/* ── Sidebar ── */}
+      <div style={{ width: 200, flexShrink: 0, borderRight: `1px solid ${t.border}`, background: t.bgElevated, display: 'flex', flexDirection: 'column' }}>
+
         {/* Org identity */}
-        <div style={{ padding: '20px 16px 12px', borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-          <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
-            Org Dashboard
-          </div>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9', lineHeight: 1.3 }}>
-            {orgName}
-          </div>
-          {orgType && (
-            <div style={{ fontSize: 11, color: '#94a3b8', textTransform: 'capitalize', marginTop: 2 }}>
-              {orgType}
+        <div style={{ padding: '16px 13px', borderBottom: `1px solid ${t.border}` }}>
+          <div style={{ display: 'flex', gap: 9, alignItems: 'center', marginBottom: 10 }}>
+            <Avatar
+              name={org.org_name}
+              color={t.accent}
+              imageUrl={org.logo_url ? `${API}${org.logo_url}` : undefined}
+              size={38}
+              radius={10}
+            />
+            <div style={{ minWidth: 0 }}>
+              <p style={{ fontSize: 11, fontWeight: 700, color: t.textPrimary, margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {org.org_name}
+              </p>
+              {org.org_type && (
+                <p style={{ fontSize: 9, color: t.textTertiary, margin: 0, textTransform: 'capitalize' }}>
+                  {TYPE_ICON[org.org_type.toLowerCase()] || '🏢'} {org.org_type}
+                </p>
+              )}
             </div>
-          )}
+          </div>
+          <span style={{ fontSize: 9, fontWeight: 700, color: t.accent, background: t.accentBg, border: `1px solid ${t.borderAcc}`, borderRadius: 99, padding: '2px 10px', letterSpacing: '0.06em' }}>
+            ORG DASHBOARD
+          </span>
         </div>
 
         {/* Navigation */}
-        <nav style={{ flex: 1, padding: '12px 8px', overflowY: 'auto' }}>
+        <nav style={{ flex: 1, padding: '6px 0', overflowY: 'auto' }}>
           {NAV_ITEMS.map(item => {
-            const active = pathname === item.href || (item.href !== '/org-dashboard' && pathname.startsWith(item.href));
+            const isActive = pathname === item.href || (item.href !== '/org-dashboard' && pathname.startsWith(item.href));
             return (
-              <Link
+              <button
                 key={item.href}
-                href={item.href}
+                onClick={() => router.push(item.href)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  padding: '8px 10px', borderRadius: 8, marginBottom: 2,
-                  fontSize: 13, fontWeight: active ? 600 : 400,
-                  color: active ? '#f1f5f9' : '#94a3b8',
-                  background: active ? 'rgba(255,255,255,0.08)' : 'transparent',
-                  textDecoration: 'none', transition: 'background 0.15s, color 0.15s',
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '9px 14px', background: isActive ? t.accentBg : 'transparent',
+                  border: 'none', cursor: 'pointer',
+                  color: isActive ? t.accent : t.textSecondary,
+                  fontSize: 12, fontFamily: 'inherit', textAlign: 'left',
+                  width: '100%', fontWeight: isActive ? 600 : 400,
+                  transition: 'background 0.15s',
                 }}
+                onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = t.accentBg; }}
+                onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
               >
-                <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
-                {item.label}
-              </Link>
+                <span style={{ fontSize: 14 }}>{item.icon}</span>
+                <span style={{ flex: 1 }}>{item.label}</span>
+              </button>
             );
           })}
+
+          {/* Public page link */}
+          {org.is_public && org.slug && (
+            <button
+              onClick={() => window.open(`/org/${org.slug}`, '_blank')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '9px 14px', background: 'transparent',
+                border: 'none', cursor: 'pointer',
+                color: t.textSecondary, fontSize: 12, fontFamily: 'inherit',
+                textAlign: 'left', width: '100%', transition: 'background 0.15s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = t.accentBg; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{ fontSize: 14 }}>👁</span>
+              <span style={{ flex: 1 }}>Public Page</span>
+              <span style={{ fontSize: 9, color: t.textTertiary }}>↗</span>
+            </button>
+          )}
         </nav>
 
-        {/* Footer */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.07)', fontSize: 11, color: '#475569' }}>
-          Powered by Chefsy
-        </div>
-      </aside>
+        {/* Logout */}
+        <button
+          onClick={handleLogout}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '10px 14px', background: 'transparent',
+            border: 'none', borderTop: `1px solid ${t.border}`,
+            cursor: 'pointer', color: t.error || '#EF4444',
+            fontSize: 12, fontFamily: 'inherit', width: '100%', textAlign: 'left',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(239,68,68,0.08)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+        >
+          <span style={{ fontSize: 14 }}>🚪</span>
+          <span>Log Out</span>
+        </button>
 
-      {/* Main content */}
-      <main style={{ flex: 1, overflowY: 'auto', padding: 28 }}>
+        {/* Theme toggle */}
+        <div style={{ padding: '8px 13px', borderTop: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ThemeToggle />
+          <span style={{ fontSize: 10, color: t.textTertiary }}>Toggle theme</span>
+        </div>
+      </div>
+
+      {/* ── Main content ── */}
+      <main style={{ flex: 1, overflowY: 'auto', padding: 28, color: t.textPrimary }}>
         {children}
       </main>
     </div>
+  );
+}
+
+export default function OrgDashboardLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <ChefThemeProvider>
+      <OrgShell>{children}</OrgShell>
+    </ChefThemeProvider>
   );
 }

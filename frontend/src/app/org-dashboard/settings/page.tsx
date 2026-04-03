@@ -2,38 +2,41 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useChefTheme } from '@/components/chef/ChefThemeContext';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8005';
 const tok = () => { try { return localStorage.getItem('gharka_token') || ''; } catch { return ''; } };
 
-const inp: React.CSSProperties = {
-  width: '100%', padding: '9px 12px', borderRadius: 8,
-  border: '1px solid #e2e8f0', background: '#fff',
-  color: '#1e293b', fontSize: 13, fontFamily: 'inherit',
-  outline: 'none', boxSizing: 'border-box',
-};
-const inpDis: React.CSSProperties = { ...inp, background: '#f1f5f9', color: '#94a3b8', cursor: 'not-allowed' };
-const lbl: React.CSSProperties = {
-  fontSize: 11, color: '#64748b', fontWeight: 600,
-  letterSpacing: '0.06em', textTransform: 'uppercase',
-  display: 'block', marginBottom: 5,
-};
-const card: React.CSSProperties = {
-  background: '#fff', border: '1px solid #e2e8f0',
-  borderRadius: 12, padding: '20px 22px', marginBottom: 16,
-};
-const cardH: React.CSSProperties = {
-  fontSize: 13, fontWeight: 700, color: '#1e293b',
-  marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8,
-};
-const btn: React.CSSProperties = {
-  padding: '9px 22px', borderRadius: 8, border: 'none',
-  background: '#3b82f6', color: '#fff', cursor: 'pointer',
-  fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-};
-
 export default function OrgSettingsPage() {
+  const { t } = useChefTheme();
   const router = useRouter();
+
+  // Derived styles from theme
+  const inp: React.CSSProperties = {
+    width: '100%', padding: '9px 12px', borderRadius: 8,
+    border: `1px solid ${t.border}`, background: t.bgInput,
+    color: t.textPrimary, fontSize: 13, fontFamily: 'inherit',
+    outline: 'none', boxSizing: 'border-box',
+  };
+  const inpDis: React.CSSProperties = { ...inp, background: t.bgSurface, color: t.textTertiary, cursor: 'not-allowed' };
+  const lbl: React.CSSProperties = {
+    fontSize: 11, color: t.textTertiary, fontWeight: 600,
+    letterSpacing: '0.06em', textTransform: 'uppercase',
+    display: 'block', marginBottom: 5,
+  };
+  const card: React.CSSProperties = {
+    background: t.bgCard, border: `1px solid ${t.border}`,
+    borderRadius: 12, padding: '20px 22px', marginBottom: 16,
+  };
+  const cardH: React.CSSProperties = {
+    fontSize: 13, fontWeight: 700, color: t.textPrimary,
+    marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8,
+  };
+  const btn: React.CSSProperties = {
+    padding: '9px 22px', borderRadius: 8, border: 'none',
+    background: t.accent, color: '#fff', cursor: 'pointer',
+    fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+  };
 
   const [org, setOrg] = useState<any | null>(null);
 
@@ -55,14 +58,20 @@ export default function OrgSettingsPage() {
   const [lat, setLat]             = useState('');
   const [lng, setLng]             = useState('');
 
+  // Logo / Banner
+  const [logoUrl,   setLogoUrl]   = useState<string | null>(null);
+  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
+  const [logoUploading,   setLogoUploading]   = useState(false);
+  const [bannerUploading, setBannerUploading] = useState(false);
+
   const [saving, setSaving]   = useState(false);
   const [msg, setMsg]         = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const t = tok();
-    if (!t) { router.replace('/auth/login'); return; }
-    fetch(`${API}/org/me`, { headers: { Authorization: `Bearer ${t}` } })
+    const tk = tok();
+    if (!tk) { router.replace('/auth/login'); return; }
+    fetch(`${API}/org/me`, { headers: { Authorization: `Bearer ${tk}` } })
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return;
@@ -81,10 +90,37 @@ export default function OrgSettingsPage() {
         setCountry(d.country || '');
         setLat(d.latitude != null ? String(d.latitude) : '');
         setLng(d.longitude != null ? String(d.longitude) : '');
+        setLogoUrl(d.logo_url || null);
+        setBannerUrl(d.banner_url || null);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [router]);
+
+  const handleImageUpload = async (field: 'logo' | 'banner', file: File) => {
+    const setUploading = field === 'logo' ? setLogoUploading : setBannerUploading;
+    const setUrl       = field === 'logo' ? setLogoUrl       : setBannerUrl;
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const r = await fetch(`${API}/org/me/${field}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok()}` },
+        body: form,
+      });
+      if (r.ok) {
+        const d = await r.json();
+        setUrl(d.url);
+        setMsg(`${field === 'logo' ? 'Logo' : 'Banner'} updated!`);
+        setTimeout(() => setMsg(''), 4000);
+      } else {
+        const err = await r.json().catch(() => ({}));
+        setMsg(err.detail || 'Upload failed.');
+      }
+    } catch { setMsg('Network error.'); }
+    setUploading(false);
+  };
 
   const handleSave = async () => {
     setSaving(true); setMsg('');
@@ -109,7 +145,6 @@ export default function OrgSettingsPage() {
       });
       if (r.ok) {
         setMsg('Saved!');
-        // Refresh to show auto-geocoded coordinates
         const updated = await fetch(`${API}/org/me`, { headers: { Authorization: `Bearer ${tok()}` } });
         if (updated.ok) {
           const d = await updated.json();
@@ -126,17 +161,63 @@ export default function OrgSettingsPage() {
   };
 
   if (loading) {
-    return <div style={{ padding: 40, color: '#64748b', fontSize: 14 }}>Loading…</div>;
+    return <div style={{ padding: 40, color: t.textSecondary, fontSize: 14 }}>Loading…</div>;
   }
 
   return (
-    <div style={{ maxWidth: 700, fontFamily: 'inherit', color: '#1e293b' }}>
-      <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, color: '#0f172a' }}>
+    <div style={{ maxWidth: 700, fontFamily: 'inherit', color: t.textPrimary }}>
+      <h1 style={{ fontSize: 20, fontWeight: 700, marginBottom: 6, color: t.textPrimary }}>
         Organisation Settings
       </h1>
-      <p style={{ fontSize: 13, color: '#64748b', marginBottom: 24 }}>
+      <p style={{ fontSize: 13, color: t.textSecondary, marginBottom: 24 }}>
         Manage your organisation profile, contact info and location.
       </p>
+
+      {/* ── Branding Images ── */}
+      <div style={card}>
+        <p style={cardH}><span>🖼️</span> Logo &amp; Banner</p>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+          {/* Logo */}
+          <div>
+            <label style={lbl}>Organisation Logo</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+              {logoUrl ? (
+                <img src={`${API}${logoUrl}`} alt="logo" style={{ width: 64, height: 64, borderRadius: 10, objectFit: 'cover', border: `1px solid ${t.border}` }} />
+              ) : (
+                <div style={{ width: 64, height: 64, borderRadius: 10, background: t.bgSurface, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, border: `1px solid ${t.border}` }}>🏢</div>
+              )}
+            </div>
+            <label style={{ display: 'inline-block', cursor: 'pointer' }}>
+              <span style={{ ...btn, padding: '7px 16px', fontSize: 12, opacity: logoUploading ? 0.6 : 1 }}>
+                {logoUploading ? 'Uploading…' : 'Upload Logo'}
+              </span>
+              <input type="file" accept="image/*" style={{ display: 'none' }} disabled={logoUploading}
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleImageUpload('logo', f); e.target.value = ''; }} />
+            </label>
+            <p style={{ fontSize: 11, color: t.textTertiary, marginTop: 6 }}>JPG, PNG or WebP · max 2 MB</p>
+          </div>
+
+          {/* Banner */}
+          <div>
+            <label style={lbl}>Banner Image</label>
+            <div style={{ marginBottom: 10 }}>
+              {bannerUrl ? (
+                <img src={`${API}${bannerUrl}`} alt="banner" style={{ width: '100%', height: 64, borderRadius: 10, objectFit: 'cover', border: `1px solid ${t.border}` }} />
+              ) : (
+                <div style={{ width: '100%', height: 64, borderRadius: 10, background: t.bgSurface, border: `1px solid ${t.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.textTertiary, fontSize: 12 }}>No banner set</div>
+              )}
+            </div>
+            <label style={{ display: 'inline-block', cursor: 'pointer' }}>
+              <span style={{ ...btn, padding: '7px 16px', fontSize: 12, opacity: bannerUploading ? 0.6 : 1 }}>
+                {bannerUploading ? 'Uploading…' : 'Upload Banner'}
+              </span>
+              <input type="file" accept="image/*" style={{ display: 'none' }} disabled={bannerUploading}
+                onChange={e => { const f = e.target.files?.[0]; if (f) handleImageUpload('banner', f); e.target.value = ''; }} />
+            </label>
+            <p style={{ fontSize: 11, color: t.textTertiary, marginTop: 6 }}>JPG, PNG or WebP · max 5 MB</p>
+          </div>
+        </div>
+      </div>
 
       {/* ── General Info ── */}
       <div style={card}>
@@ -170,9 +251,9 @@ export default function OrgSettingsPage() {
             <input
               type="checkbox" id="isPublic" checked={isPublic}
               onChange={e => setIsPublic(e.target.checked)}
-              style={{ width: 16, height: 16, accentColor: '#3b82f6', cursor: 'pointer' }}
+              style={{ width: 16, height: 16, accentColor: t.accent, cursor: 'pointer' }}
             />
-            <label htmlFor="isPublic" style={{ fontSize: 13, color: '#475569', cursor: 'pointer' }}>
+            <label htmlFor="isPublic" style={{ fontSize: 13, color: t.textSecondary, cursor: 'pointer' }}>
               List organisation publicly
             </label>
           </div>
@@ -180,7 +261,7 @@ export default function OrgSettingsPage() {
             <label style={lbl}>Accent Colour</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <input type="color" value={accentColor} onChange={e => setAccent(e.target.value)}
-                style={{ width: 36, height: 36, borderRadius: 6, border: '1px solid #e2e8f0', cursor: 'pointer', padding: 2 }} />
+                style={{ width: 36, height: 36, borderRadius: 6, border: `1px solid ${t.border}`, cursor: 'pointer', padding: 2 }} />
               <input style={{ ...inp, flex: 1 }} value={accentColor} onChange={e => setAccent(e.target.value)} placeholder="#3B82F6" />
             </div>
           </div>
@@ -229,7 +310,7 @@ export default function OrgSettingsPage() {
             </div>
           </div>
         )}
-        <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 10 }}>
+        <p style={{ fontSize: 11, color: t.textTertiary, marginTop: 10 }}>
           Coordinates are auto-detected from the address above when you save.
         </p>
       </div>
@@ -240,7 +321,7 @@ export default function OrgSettingsPage() {
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
         {msg && (
-          <span style={{ fontSize: 13, color: msg === 'Saved!' ? '#22c55e' : '#ef4444' }}>{msg}</span>
+          <span style={{ fontSize: 13, color: msg === 'Saved!' ? '#22c55e' : t.error || '#ef4444' }}>{msg}</span>
         )}
       </div>
     </div>

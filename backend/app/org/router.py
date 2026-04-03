@@ -1,8 +1,14 @@
 from typing import Optional
+import uuid, pathlib
 
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request, Query, UploadFile, File
 
 from app.org import repository, service
+
+_MEDIA_ROOT  = pathlib.Path(__file__).resolve().parents[3] / "media"
+_ALLOWED_IMG = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+_MAX_LOGO    = 2 * 1024 * 1024   # 2 MB
+_MAX_BANNER  = 5 * 1024 * 1024   # 5 MB
 from app.org.schema import (
     GroupCreate, GroupUpdate,
     MemberBulkInvite, MemberInvite, MemberUpdate,
@@ -41,6 +47,50 @@ async def update_my_org(request: Request, body: OrgProfileUpdate):
     user_id = _require_user(request)
     await service.update_my_org(user_id, body.model_dump(exclude_none=True))
     return {"status": "ok"}
+
+
+@router.post("/me/logo")
+async def upload_org_logo(request: Request, file: UploadFile = File(...)):
+    """Upload or replace the organisation logo."""
+    user_id = _require_user(request)
+    org = repository.get_org_by_admin(user_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    if file.content_type not in _ALLOWED_IMG:
+        raise HTTPException(status_code=400, detail="Only JPG / PNG / WebP / GIF allowed")
+    data = await file.read()
+    if len(data) > _MAX_LOGO:
+        raise HTTPException(status_code=400, detail="Logo must be under 2 MB")
+    ext      = file.content_type.split("/")[1].replace("jpeg", "jpg")
+    filename = f"org_logo_{org['id']}_{uuid.uuid4().hex[:8]}.{ext}"
+    dest     = _MEDIA_ROOT / "orgs"
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / filename).write_bytes(data)
+    url = f"/media/orgs/{filename}"
+    repository.update_org_profile(org["id"], {"logo_url": url})
+    return {"url": url}
+
+
+@router.post("/me/banner")
+async def upload_org_banner(request: Request, file: UploadFile = File(...)):
+    """Upload or replace the organisation banner image."""
+    user_id = _require_user(request)
+    org = repository.get_org_by_admin(user_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    if file.content_type not in _ALLOWED_IMG:
+        raise HTTPException(status_code=400, detail="Only JPG / PNG / WebP / GIF allowed")
+    data = await file.read()
+    if len(data) > _MAX_BANNER:
+        raise HTTPException(status_code=400, detail="Banner must be under 5 MB")
+    ext      = file.content_type.split("/")[1].replace("jpeg", "jpg")
+    filename = f"org_banner_{org['id']}_{uuid.uuid4().hex[:8]}.{ext}"
+    dest     = _MEDIA_ROOT / "orgs"
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / filename).write_bytes(data)
+    url = f"/media/orgs/{filename}"
+    repository.update_org_profile(org["id"], {"banner_url": url})
+    return {"url": url}
 
 
 # ─── Staff ───────────────────────────────────────────────────────────────────
